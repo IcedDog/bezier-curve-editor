@@ -21,11 +21,51 @@ from .config import (
     REDRAW_LAST_INTERVAL_KEY,
     MODAL_SESSION_KEY,
     SWITCH_BLOCK_UNTIL_KEY,
+    TLFC_PROPERTY_DEFAULTS,
+    TLFC_PROPERTY_RANGES,
+    TLFC_UI_NUMBERS,
+    TLFC_COLORS,
 )
 
 _PRESET_CACHE = []
 _PRESET_MTIME = -1.0
 ADDON_MODULE_KEY = __package__ or __name__.split(".")[0]
+
+
+def _prop_default(name):
+    return TLFC_PROPERTY_DEFAULTS[name]
+
+
+def _prop_range(name):
+    return TLFC_PROPERTY_RANGES[name]
+
+
+def _clamp_prop(name, value):
+    min_v, max_v = _prop_range(name)
+    out = value
+    if min_v is not None:
+        out = max(min_v, out)
+    if max_v is not None:
+        out = min(max_v, out)
+    return out
+
+
+def _prop_to_unit(name, value):
+    """Map a property value to normalized 0..1 space based on configured range."""
+    min_v, max_v = _prop_range(name)
+    if min_v is None or max_v is None:
+        return _clamp01(float(value))
+    span = max(1e-8, float(max_v) - float(min_v))
+    return _clamp01((float(value) - float(min_v)) / span)
+
+
+def _unit_to_prop(name, unit_value):
+    """Map normalized 0..1 value back to configured property range."""
+    min_v, max_v = _prop_range(name)
+    u = _clamp01(float(unit_value))
+    if min_v is None or max_v is None:
+        return _clamp_prop(name, u)
+    return _clamp_prop(name, float(min_v) + u * (float(max_v) - float(min_v)))
 
 
 def _reset_ui_state(wm, *, clear_drag=True, clear_hover=True, clear_buttons=True, clear_handle=True):
@@ -170,7 +210,7 @@ def _truncate_text_to_width(text, max_width, size=10):
     return text[:lo] + ellipsis
 
 
-def _draw_text_centered(x0, y0, x1, y1, text, size=10, color=(1, 1, 1, 1), truncate=False, pad=4):
+def _draw_text_centered(x0, y0, x1, y1, text, size=10, color=TLFC_COLORS["white"], truncate=False, pad=4):
     font_id = 0
     if truncate:
         text = _truncate_text_to_width(str(text), max(1.0, (x1 - x0) - (pad * 2.0)), size=size)
@@ -215,14 +255,14 @@ def _load_presets(force=False):
             }
             # Load type-specific parameters
             if preset["type"] == "ELASTIC":
-                preset["amplitude"] = float(p.get("amplitude", 1.0))
-                preset["period"] = float(p.get("period", 0.3))
+                preset["amplitude"] = float(p.get("amplitude", _prop_default("tlfc_elastic_amplitude")))
+                preset["period"] = float(p.get("period", _prop_default("tlfc_elastic_period")))
             else:
                 # BEZIER or fallback
-                preset["h1x"] = float(p.get("h1x", 0.333))
-                preset["h1y"] = float(p.get("h1y", 0.0))
-                preset["h2x"] = float(p.get("h2x", 0.667))
-                preset["h2y"] = float(p.get("h2y", 1.0))
+                preset["h1x"] = float(p.get("h1x", _prop_default("tlfc_h1x")))
+                preset["h1y"] = float(p.get("h1y", _prop_default("tlfc_h1y")))
+                preset["h2x"] = float(p.get("h2x", _prop_default("tlfc_h2x")))
+                preset["h2y"] = float(p.get("h2y", _prop_default("tlfc_h2y")))
             presets.append(preset)
         _PRESET_CACHE = presets
         _PRESET_MTIME = mtime
@@ -246,14 +286,14 @@ def _save_presets(presets):
 
 def _add_current_preset(wm):
     presets = list(_load_presets())
-    _mode_val = getattr(wm, 'tlfc_sidebar_mode', 'BEZIER')
+    _mode_val = getattr(wm, 'tlfc_sidebar_mode', _prop_default("tlfc_sidebar_mode"))
     preset = {
         "name": "Curve",
         "type": _mode_val,  # 'BEZIER' or 'ELASTIC'
     }
     if _mode_val == 'ELASTIC':
-        preset["amplitude"] = float(getattr(wm, 'tlfc_elastic_amplitude', 1.0))
-        preset["period"] = float(getattr(wm, 'tlfc_elastic_period', 0.3))
+        preset["amplitude"] = float(getattr(wm, 'tlfc_elastic_amplitude', _prop_default("tlfc_elastic_amplitude")))
+        preset["period"] = float(getattr(wm, 'tlfc_elastic_period', _prop_default("tlfc_elastic_period")))
     else:
         preset["h1x"] = float(wm.tlfc_h1x)
         preset["h1y"] = float(wm.tlfc_h1y)
@@ -270,17 +310,17 @@ def _apply_preset_index(wm, idx):
     p = presets[idx]
 
     # Switch to appropriate mode
-    preset_type = p.get("type", "BEZIER")
+    preset_type = p.get("type", _prop_default("tlfc_sidebar_mode"))
     wm.tlfc_sidebar_mode = preset_type
 
     if preset_type == "ELASTIC":
-        wm.tlfc_elastic_amplitude = p.get("amplitude", 1.0)
-        wm.tlfc_elastic_period = p.get("period", 0.3)
+        wm.tlfc_elastic_amplitude = p.get("amplitude", _prop_default("tlfc_elastic_amplitude"))
+        wm.tlfc_elastic_period = p.get("period", _prop_default("tlfc_elastic_period"))
     else:
-        wm.tlfc_h1x = p.get("h1x", 0.333)
-        wm.tlfc_h1y = p.get("h1y", 0.0)
-        wm.tlfc_h2x = p.get("h2x", 0.667)
-        wm.tlfc_h2y = p.get("h2y", 1.0)
+        wm.tlfc_h1x = p.get("h1x", _prop_default("tlfc_h1x"))
+        wm.tlfc_h1y = p.get("h1y", _prop_default("tlfc_h1y"))
+        wm.tlfc_h2x = p.get("h2x", _prop_default("tlfc_h2x"))
+        wm.tlfc_h2y = p.get("h2y", _prop_default("tlfc_h2y"))
     return True
 
 
@@ -293,15 +333,15 @@ def _delete_preset_index(idx):
 
 
 def _draw_preset_tile(x0, y0, x1, y1, preset, size_scale):
-    _draw_rect(x0, y0, x1, y1, (0.18, 0.20, 0.24, 0.92))
-    _draw_aa_line_strip([(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)], (0.70, 0.74, 0.82, 0.95), width=1.0)
+    _draw_rect(x0, y0, x1, y1, TLFC_COLORS["preset_tile_bg"])
+    _draw_aa_line_strip([(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)], TLFC_COLORS["preset_tile_border"], width=2.0)
     pad = max(4, int(5 * size_scale))
     ix0 = x0 + pad
     iy0 = y0 + pad + 10
     ix1 = x1 - pad
     iy1 = y1 - pad
-    _draw_rect(ix0, iy0, ix1, iy1, (0.08, 0.09, 0.11, 0.8))
-    _draw_aa_line_strip([(ix0, iy0), (ix1, iy0), (ix1, iy1), (ix0, iy1), (ix0, iy0)], (0.42, 0.45, 0.52, 0.95), width=1.0)
+    _draw_rect(ix0, iy0, ix1, iy1, TLFC_COLORS["preset_preview_bg"])
+    _draw_aa_line_strip([(ix0, iy0), (ix1, iy0), (ix1, iy1), (ix0, iy1), (ix0, iy0)], TLFC_COLORS["preset_preview_border"], width=2.0)
 
     preset_type = preset.get("type", "BEZIER")
     pts = []
@@ -309,8 +349,8 @@ def _draw_preset_tile(x0, y0, x1, y1, preset, size_scale):
 
     if preset_type == "ELASTIC":
         # Draw elastic curve preview
-        amplitude = preset.get("amplitude", 1.0)
-        period = preset.get("period", 0.3)
+        amplitude = preset.get("amplitude", _prop_default("tlfc_elastic_amplitude"))
+        period = preset.get("period", _prop_default("tlfc_elastic_period"))
         for i in range(preview_steps):
             t = i / (preview_steps - 1.0)
             bx = t
@@ -320,10 +360,10 @@ def _draw_preset_tile(x0, y0, x1, y1, preset, size_scale):
             pts.append((ix0 + bx * (ix1 - ix0), iy0 + by_clamped * (iy1 - iy0)))
     else:
         # Draw bezier curve preview
-        h1x = max(0.0, float(preset.get("h1x", 0.333)))
-        h1y = float(preset.get("h1y", 0.0))
-        h2x = min(1.0, float(preset.get("h2x", 0.667)))
-        h2y = float(preset.get("h2y", 1.0))
+        h1x = max(0.0, float(preset.get("h1x", _prop_default("tlfc_h1x"))))
+        h1y = float(preset.get("h1y", _prop_default("tlfc_h1y")))
+        h2x = min(1.0, float(preset.get("h2x", _prop_default("tlfc_h2x"))))
+        h2y = float(preset.get("h2y", _prop_default("tlfc_h2y")))
         p0 = (0.0, 0.0)
         p1 = (h1x, h1y)
         p2 = (h2x, h2y)
@@ -333,8 +373,8 @@ def _draw_preset_tile(x0, y0, x1, y1, preset, size_scale):
             bx, by = _bezier_point(t, p0, p1, p2, p3)
             pts.append((ix0 + bx * (ix1 - ix0), iy0 + by * (iy1 - iy0)))
 
-    _draw_aa_line_strip(pts, (0.95, 0.62, 0.18, 1.0), width=1.5)
-    _draw_text_centered(x0, y0, x1, y0 + 12, preset.get("name", "P"), size=max(8, int(9 * size_scale)), color=(0.92, 0.94, 0.98, 1.0), truncate=True, pad=4)
+    _draw_aa_line_strip(pts, TLFC_COLORS["curve_orange"], width=2.0)
+    _draw_text_centered(x0, y0, x1, y0 + 12, preset.get("name", "P"), size=max(8, int(9 * size_scale)), color=TLFC_COLORS["preset_title_text"], truncate=True, pad=4)
 
 # ---------- Drawing helpers ----------
 def _draw_rect(x0, y0, x1, y1, color):
@@ -343,7 +383,9 @@ def _draw_rect(x0, y0, x1, y1, color):
     batch = batch_for_shader(shader, 'TRI_STRIP', {"pos": verts})
     shader.bind()
     shader.uniform_float("color", color)
+    gpu.state.blend_set('ALPHA')
     batch.draw(shader)
+    gpu.state.blend_set('NONE')
 
 
 def _draw_aa_line_strip(points, color, width=1.0):
@@ -364,7 +406,9 @@ def _draw_aa_line_strip(points, color, width=1.0):
     shader.uniform_float("viewportSize", viewport_size)
     shader.uniform_float("lineWidth", max(1.0, float(width)))
     shader.uniform_float("color", color)
+    gpu.state.blend_set('ALPHA')
     batch.draw(shader)
+    gpu.state.blend_set('NONE')
 
 
 def _draw_filled_circle(x, y, r, color, steps=24):
@@ -382,7 +426,9 @@ def _draw_filled_circle(x, y, r, color, steps=24):
     batch = batch_for_shader(shader, 'TRI_FAN', {"pos": verts})
     shader.bind()
     shader.uniform_float("color", color)
+    gpu.state.blend_set('ALPHA')
     batch.draw(shader)
+    gpu.state.blend_set('NONE')
 
 
 def _draw_circle(x, y, r, color, steps=24, width=1.0):
@@ -403,7 +449,7 @@ def _draw_aa_circle(x, y, r, fill_color, outline_color, steps=28):
     # Keep original perceived thickness while improving edge quality.
     step_count = max(24, int(steps))
     _draw_filled_circle(x, y, max(1.0, r - 0.8), fill_color, steps=step_count)
-    _draw_circle(x, y, r, outline_color, steps=step_count, width=1.0)
+    _draw_circle(x, y, r, outline_color, steps=step_count, width=2.0)
 
 
 def _adjust_rgba(color, delta):
@@ -417,29 +463,29 @@ def _adjust_rgba(color, delta):
 
 def _button_state_colors(kind, state):
     if kind == "apply":
-        base = (0.72, 0.36, 0.15, 0.95)
-        border = (0.84, 0.77, 0.66, 0.98)
+        base = TLFC_COLORS["button_apply_base"]
+        border = TLFC_COLORS["button_apply_border"]
     elif kind == "auto_on":
-        base = (0.14, 0.48, 0.24, 0.95)
-        border = (0.62, 0.88, 0.66, 0.98)
+        base = TLFC_COLORS["button_auto_on_base"]
+        border = TLFC_COLORS["button_auto_on_border"]
     elif kind == "auto_off":
-        base = (0.34, 0.20, 0.20, 0.92)
-        border = (0.84, 0.62, 0.62, 0.95)
+        base = TLFC_COLORS["button_auto_off_base"]
+        border = TLFC_COLORS["button_auto_off_border"]
     elif kind == "preset":
-        base = (0.22, 0.26, 0.32, 0.90)
-        border = (0.66, 0.71, 0.81, 0.95)
+        base = TLFC_COLORS["button_preset_base"]
+        border = TLFC_COLORS["button_preset_border"]
     else:
-        base = (0.24, 0.28, 0.36, 0.88)
-        border = (0.70, 0.74, 0.82, 0.95)
+        base = TLFC_COLORS["button_default_base"]
+        border = TLFC_COLORS["button_default_border"]
 
     if state == "hover":
-        return _adjust_rgba(base, 0.08), _adjust_rgba(border, 0.07), (1.0, 1.0, 1.0, 1.0)
+        return _adjust_rgba(base, 0.08), _adjust_rgba(border, 0.07), TLFC_COLORS["white"]
     if state == "pressed":
-        return _adjust_rgba(base, -0.08), _adjust_rgba(border, -0.05), (0.93, 0.94, 0.96, 1.0)
-    return base, border, (0.96, 0.97, 0.99, 1.0)
+        return _adjust_rgba(base, -0.08), _adjust_rgba(border, -0.05), TLFC_COLORS["text_pressed"]
+    return base, border, TLFC_COLORS["text_default"]
 
 
-def _draw_text_clipped_left(x, y, max_width, text, size=10, color=(1, 1, 1, 1), pad=0):
+def _draw_text_clipped_left(x, y, max_width, text, size=10, color=TLFC_COLORS["white"], pad=0):
     clipped = _truncate_text_to_width(str(text), max(1.0, max_width - pad), size=size)
     if not clipped:
         return
@@ -463,13 +509,28 @@ def _elastic_ease_out_normalized(t, amplitude=1.0, period=0.3):
     if t >= 1.0:
         return 1.0
     per = max(0.001, float(period))
-    amp = float(amplitude)
-    if amp < 1.0:
-        amp = 1.0
+    amp_in = max(0.0, float(amplitude))
+
+    time = -float(t)
+    f = 1.0
+
+    if amp_in < 1.0:
         s = per / 4.0
+        blend_t = abs(s)
+        if amp_in > 0.0:
+            f *= amp_in
+        else:
+            f = 0.0
+        if blend_t > 1e-8 and abs(time) < blend_t:
+            l = abs(time) / blend_t
+            f = (f * l) + (1.0 - l)
+        amp = 1.0
     else:
-        s = per / (2.0 * math.pi) * math.asin(1.0 / amp)
-    return amp * math.pow(2.0, -10.0 * t) * math.sin((t - s) * (2.0 * math.pi) / per) + 1.0
+        amp = amp_in
+        asin_arg = max(-1.0, min(1.0, 1.0 / amp))
+        s = per / (2.0 * math.pi) * math.asin(asin_arg)
+
+    return (f * (amp * math.pow(2.0, 10.0 * time) * math.sin((time - s) * (2.0 * math.pi) / per))) + 1.0
 
 
 def _apply_elastic_to_segment(fc, k0, k1, amplitude, period):
@@ -507,7 +568,7 @@ def _apply_elastic_to_segment(fc, k0, k1, amplitude, period):
     return True
 
 
-def _draw_text(x, y, text, size=12, color=(1, 1, 1, 1)):
+def _draw_text(x, y, text, size=12, color=TLFC_COLORS["white"]):
     font_id = 0
     blf.size(font_id, size)
     blf.color(font_id, *color)
@@ -939,7 +1000,6 @@ def draw_editor_sidebar():
         return
     is_info_space = (space.type == 'INFO')
     size_scale = wm.tlfc_display_size
-    gpu.state.blend_set('ALPHA')
     if is_info_space:
         # Info editor variant: keep sidebar full-width whenever active.
         x0 = 0
@@ -948,7 +1008,7 @@ def draw_editor_sidebar():
         pad_outer = 0
     else:
         sidebar_w = int(region.width * (wm.tlfc_sidebar_width / 100.0))
-        sidebar_w = max(160, min(region.width, sidebar_w))
+        sidebar_w = max(int(TLFC_UI_NUMBERS["sidebar_min_px"]), min(region.width, sidebar_w))
         alpha = wm.tlfc_alpha
         pad_outer = wm.tlfc_outer_pad
         x1 = region.width - pad_outer
@@ -956,27 +1016,27 @@ def draw_editor_sidebar():
     y0 = pad_outer
     y1 = region.height - pad_outer
     # Panel background and border
-    bg = (0.08, 0.09, 0.11, alpha)
-    border = (0.65, 0.68, 0.74, min(1.0, alpha + 0.2))
+    bg = (TLFC_COLORS["panel_bg"][0], TLFC_COLORS["panel_bg"][1], TLFC_COLORS["panel_bg"][2], alpha)
+    border = (TLFC_COLORS["panel_border"][0], TLFC_COLORS["panel_border"][1], TLFC_COLORS["panel_border"][2], min(1.0, alpha + 0.2))
     if getattr(wm, "tlfc_hover_sidebar_edge", False) or getattr(wm, "tlfc_dragging_sidebar", False):
-        border = (0.90, 0.74, 0.42, min(1.0, alpha + 0.28))
+        border = (TLFC_COLORS["panel_border_hover"][0], TLFC_COLORS["panel_border_hover"][1], TLFC_COLORS["panel_border_hover"][2], min(1.0, alpha + 0.28))
     _draw_rect(x0, y0, x1, y1, bg)
     full_width_panel = (x0 <= 0 and x1 >= region.width)
     if pad_outer == 0:
         # Keep left edge invisible when panel spans entire editor width.
         if not full_width_panel:
-            _draw_aa_line_strip([(x0, y0), (x0, y1)], border, width=1.0)
-        _draw_aa_line_strip([(x1, y0), (x1, y1)], border, width=1.0)
+            _draw_aa_line_strip([(x0, y0), (x0, y1)], border, width=2.0)
+        _draw_aa_line_strip([(x1, y0), (x1, y1)], border, width=2.0)
     else:
         if full_width_panel:
-            _draw_aa_line_strip([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], border, width=1.0)
+            _draw_aa_line_strip([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], border, width=2.0)
         else:
-            _draw_aa_line_strip([(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)], border, width=1.0)
+            _draw_aa_line_strip([(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)], border, width=2.0)
     title_top_pad = max(6, int(8 * size_scale))
     selected_items = _selected_fcurves_with_selected_keys(ctx)
     ns = bpy.app.driver_namespace
 
-    sidebar_mode = getattr(wm, 'tlfc_sidebar_mode', 'BEZIER')
+    sidebar_mode = getattr(wm, 'tlfc_sidebar_mode', _prop_default("tlfc_sidebar_mode"))
     hover_token = getattr(wm, "tlfc_hover_button", "")
     pressed_token = getattr(wm, "tlfc_pressed_button", "")
     _tab_btn_font = max(9, int(10 * size_scale))
@@ -998,8 +1058,8 @@ def draw_editor_sidebar():
     sx1 = sx0 + sq
     sy0 = sy1 - sq
 
-    _draw_rect(sx0, sy0, sx1, sy1, (0.03, 0.035, 0.045, 0.7))
-    _draw_aa_line_strip([(sx0, sy0), (sx1, sy0), (sx1, sy1), (sx0, sy1), (sx0, sy0)], (0.42, 0.45, 0.52, 0.95), width=1.0)
+    _draw_rect(sx0, sy0, sx1, sy1, TLFC_COLORS["graph_bg"])
+    _draw_aa_line_strip([(sx0, sy0), (sx1, sy0), (sx1, sy1), (sx0, sy1), (sx0, sy0)], TLFC_COLORS["preset_preview_border"], width=1.0)
 
     # Draw tab buttons (Bezier | Elastic) and collect rects for hit-testing
     _pending_tab_buttons = []
@@ -1016,20 +1076,20 @@ def draw_editor_sidebar():
         _token = _button_token("set_mode", {"mode": _tmode})
         _tstate = "pressed" if pressed_token == _token else ("hover" if hover_token == _token else "normal")
         if _is_active:
-            _tab_bg = (0.26, 0.30, 0.40, 0.95)
-            _tab_tc = (1.0, 1.0, 1.0, 1.0)
+            _tab_bg = TLFC_COLORS["tab_active_bg"]
+            _tab_tc = TLFC_COLORS["tab_active_text"]
         else:
-            _tab_bg = (0.15, 0.17, 0.22, 0.88)
-            _tab_tc = (0.72, 0.76, 0.84, 1.0)
+            _tab_bg = TLFC_COLORS["tab_inactive_bg"]
+            _tab_tc = TLFC_COLORS["tab_inactive_text"]
         if _tstate == "hover":
             _tab_bg = _adjust_rgba(_tab_bg, 0.08)
             if not _is_active:
-                _tab_tc = (0.92, 0.94, 0.98, 1.0)
+                _tab_tc = TLFC_COLORS["tab_inactive_hover_text"]
         elif _tstate == "pressed":
             _tab_bg = _adjust_rgba(_tab_bg, -0.06)
         _draw_rect(_tx0, tab_y0, _tx1, tab_y1, _tab_bg)
         if _is_active:
-            _draw_aa_line_strip([(_tx0, tab_y0), (_tx1, tab_y0), (_tx1, tab_y1), (_tx0, tab_y1), (_tx0, tab_y0)], (0.50, 0.58, 0.82, 0.90), width=1.0)
+            _draw_aa_line_strip([(_tx0, tab_y0), (_tx1, tab_y0), (_tx1, tab_y1), (_tx0, tab_y1), (_tx0, tab_y0)], TLFC_COLORS["tab_active_outline"], width=1.0)
         _draw_text_centered(_tx0, tab_y0, _tx1, tab_y1, _t(wm, _tkey, _tdefault), size=_tab_btn_font, color=_tab_tc, truncate=True, pad=4)
         _pending_tab_buttons.append({
             "rect_local": (_tx0, tab_y0, _tx1, tab_y1),
@@ -1054,7 +1114,7 @@ def draw_editor_sidebar():
     grid_total_divs = int((grid_max - grid_min) * subdiv)
 
     # Determine line width based on zoom level
-    base_width = 1.0
+    base_width = 2.0
     grid_line_width = base_width * (0.8 + 0.2 * min(zoom, 3.0))
     axis_line_width = grid_line_width * 1.8
 
@@ -1071,15 +1131,15 @@ def draw_editor_sidebar():
 
         if is_x_axis:
             # X=0 and Y=0 axes - bright highlight
-            col = (0.45, 0.50, 0.65, 1.0)
+            col = TLFC_COLORS["grid_axis"]
             width = axis_line_width
         elif is_boundary:
             # Boundary lines at 0 and 1
-            col = (0.30, 0.33, 0.39, 0.9)
+            col = TLFC_COLORS["grid_boundary"]
             width = grid_line_width
         else:
             # Regular grid lines
-            col = (0.24, 0.26, 0.31, 0.65)
+            col = TLFC_COLORS["grid_regular"]
             width = grid_line_width * 0.8
 
         # Draw vertical line (clipped)
@@ -1107,8 +1167,8 @@ def draw_editor_sidebar():
     if sidebar_mode == 'ELASTIC':
         # --- Elastic mode ---
         # Editor ranges: amplitude 0.0–1.0, period 0.05–1.0
-        _el_amp = max(0.0, min(1.0, getattr(wm, 'tlfc_elastic_amplitude', 1.0)))
-        _el_per = max(0.05, min(1.0, getattr(wm, 'tlfc_elastic_period', 0.3)))
+        _el_amp = _clamp_prop("tlfc_elastic_amplitude", getattr(wm, 'tlfc_elastic_amplitude', _prop_default("tlfc_elastic_amplitude")))
+        _el_per = _clamp_prop("tlfc_elastic_period", getattr(wm, 'tlfc_elastic_period', _prop_default("tlfc_elastic_period")))
 
         # --- Draw elastic curve, clipped to the graph box via scissor ---
         _el_n = max(96, wm.tlfc_samples * 3)
@@ -1122,15 +1182,13 @@ def draw_editor_sidebar():
         for _i in range(len(_el_pts) - 1):
             _seg = _clip_line_to_rect(_el_pts[_i], _el_pts[_i + 1], sx0, sy0, sx1, sy1)
             if _seg:
-                _draw_aa_line_strip(_seg, (0.42, 0.88, 0.56, 1.0), width=2.0)
+                _draw_aa_line_strip(_seg, TLFC_COLORS["elastic_curve"], width=4.0)
 
-        # Handle positions in normalised editor space:
-        #   H1 (blue)   – fixed x=0.10, y driven by amplitude 0.0..1.0
-        #   H2 (orange) – y=0.25 fixed, x driven by period 0.05..1.0 → 0..1
-        _amp_norm = _clamp01(_el_amp)
-        _per_norm = _clamp01((_el_per - 0.05) / 0.95)
-        p1s_raw = _editor_to_screen(0.10, _amp_norm, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
-        p2s_raw = _editor_to_screen(_per_norm, 0.25, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
+        # Handle positions in normalized editor space mapped from configured ranges.
+        _amp_norm = _prop_to_unit("tlfc_elastic_amplitude", _el_amp)
+        _per_norm = _prop_to_unit("tlfc_elastic_period", _el_per)
+        p1s_raw = _editor_to_screen(TLFC_UI_NUMBERS["elastic_handle_x"], _amp_norm, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
+        p2s_raw = _editor_to_screen(_per_norm, TLFC_UI_NUMBERS["elastic_handle_y"], sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
         # Clamp handle positions to view rect for drawing and hit-testing.
         p1s = _clamp_to_view(*p1s_raw)
         p2s = _clamp_to_view(*p2s_raw)
@@ -1140,21 +1198,21 @@ def draw_editor_sidebar():
         _p_end   = _editor_to_screen(1.0, 0.5, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
         _ep_r = 4.0 * size_scale
         if sx0 <= _p_start[0] <= sx1 and sy0 <= _p_start[1] <= sy1:
-            _draw_aa_circle(_p_start[0], _p_start[1], _ep_r, (0.18, 0.20, 0.26, 1.0), (0.75, 0.78, 0.85, 0.95))
+            _draw_aa_circle(_p_start[0], _p_start[1], _ep_r, TLFC_COLORS["endpoint_fill"], TLFC_COLORS["endpoint_outline"])
         if sx0 <= _p_end[0] <= sx1 and sy0 <= _p_end[1] <= sy1:
-            _draw_aa_circle(_p_end[0], _p_end[1], _ep_r, (0.18, 0.20, 0.26, 1.0), (0.75, 0.78, 0.85, 0.95))
+            _draw_aa_circle(_p_end[0], _p_end[1], _ep_r, TLFC_COLORS["endpoint_fill"], TLFC_COLORS["endpoint_outline"])
 
         # --- Axis guide lines (clipped to view) ---
-        _g_amp_bot = _editor_to_screen(0.10, 0.0, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
-        _g_amp_top = _editor_to_screen(0.10, 1.0, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
+        _g_amp_bot = _editor_to_screen(TLFC_UI_NUMBERS["elastic_handle_x"], 0.0, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
+        _g_amp_top = _editor_to_screen(TLFC_UI_NUMBERS["elastic_handle_x"], 1.0, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
         _gc = _clip_line_to_rect(_g_amp_bot, _g_amp_top, sx0, sy0, sx1, sy1)
         if _gc:
-            _draw_aa_line_strip(_gc, (0.22, 0.84, 0.96, 0.18), width=1.0)
-        _g_per_l = _editor_to_screen(0.0, 0.25, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
-        _g_per_r = _editor_to_screen(1.0, 0.25, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
+            _draw_aa_line_strip(_gc, TLFC_COLORS["elastic_amp_guide"], width=4.0)
+        _g_per_l = _editor_to_screen(0.0, TLFC_UI_NUMBERS["elastic_handle_y"], sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
+        _g_per_r = _editor_to_screen(1.0, TLFC_UI_NUMBERS["elastic_handle_y"], sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
         _gp = _clip_line_to_rect(_g_per_l, _g_per_r, sx0, sy0, sx1, sy1)
         if _gp:
-            _draw_aa_line_strip(_gp, (0.96, 0.48, 0.24, 0.18), width=1.0)
+            _draw_aa_line_strip(_gp, TLFC_COLORS["elastic_per_guide"], width=4.0)
 
         # --- Handle circles (drawn at clamped positions, always inside view) ---
         hover_handle = getattr(wm, 'tlfc_hover_handle', '')
@@ -1162,8 +1220,8 @@ def draw_editor_sidebar():
         h2_radius = 7.0 * size_scale if hover_handle == 'h2' else 5.4 * size_scale
         h1_alpha  = 1.0 if hover_handle == 'h1' else 0.92
         h2_alpha  = 1.0 if hover_handle == 'h2' else 0.92
-        _draw_aa_circle(p1s[0], p1s[1], h1_radius, (0.22, 0.84, 0.96, 1.0), (1.0, 1.0, 1.0, h1_alpha))
-        _draw_aa_circle(p2s[0], p2s[1], h2_radius, (0.96, 0.48, 0.24, 1.0), (1.0, 1.0, 1.0, h2_alpha))
+        _draw_aa_circle(p1s[0], p1s[1], h1_radius, TLFC_COLORS["handle_amp_fill"], (TLFC_COLORS["handle_outline"][0], TLFC_COLORS["handle_outline"][1], TLFC_COLORS["handle_outline"][2], h1_alpha))
+        _draw_aa_circle(p2s[0], p2s[1], h2_radius, TLFC_COLORS["handle_per_fill"], (TLFC_COLORS["handle_outline"][0], TLFC_COLORS["handle_outline"][1], TLFC_COLORS["handle_outline"][2], h2_alpha))
 
         # --- Labels next to handles, kept inside view ---
         _lbl_sz = max(8, int(9 * size_scale))
@@ -1176,8 +1234,8 @@ def draw_editor_sidebar():
         _p_w = blf.dimensions(0, _p_text)[0]
         _ax, _ay = _label_pos(p1s[0], p1s[1], _a_w, _lbl_h, _lbl_off, -4)
         _px, _py = _label_pos(p2s[0], p2s[1], _p_w, _lbl_h, -4, _lbl_off)
-        _draw_text(_ax, _ay, _a_text, size=_lbl_sz, color=(0.22, 0.84, 0.96, 0.9))
-        _draw_text(_px, _py, _p_text, size=_lbl_sz, color=(0.96, 0.48, 0.24, 0.9))
+        _draw_text(_ax, _ay, _a_text, size=_lbl_sz, color=TLFC_COLORS["elastic_amp_label"])
+        _draw_text(_px, _py, _p_text, size=_lbl_sz, color=TLFC_COLORS["elastic_per_label"])
 
     else:
         # --- Bezier mode ---
@@ -1198,10 +1256,10 @@ def draw_editor_sidebar():
         _p3_in = sx0 <= p3s[0] <= sx1 and sy0 <= p3s[1] <= sy1
         _hl1 = _clip_line_to_rect(p0s, p1s, sx0, sy0, sx1, sy1)
         if _hl1:
-            _draw_aa_line_strip(_hl1, (0.64, 0.66, 0.72, 0.85), width=1.0)
+            _draw_aa_line_strip(_hl1, TLFC_COLORS["handle_line"], width=2.0)
         _hl2 = _clip_line_to_rect(p3s, p2s, sx0, sy0, sx1, sy1)
         if _hl2:
-            _draw_aa_line_strip(_hl2, (0.64, 0.66, 0.72, 0.85), width=1.0)
+            _draw_aa_line_strip(_hl2, TLFC_COLORS["handle_line"], width=2.0)
 
         # Bezier curve – scissor-clip to view rect so it never bleeds outside.
         curve_pts = []
@@ -1215,14 +1273,14 @@ def draw_editor_sidebar():
         for _i in range(len(curve_pts) - 1):
             _cs = _clip_line_to_rect(curve_pts[_i], curve_pts[_i + 1], sx0, sy0, sx1, sy1)
             if _cs:
-                _draw_aa_line_strip(_cs, (0.95, 0.62, 0.18, 1.0), width=2.0)
+                _draw_aa_line_strip(_cs, TLFC_COLORS["curve_orange"], width=4.0)
 
         # --- Start / end point markers (only when anchor is inside view) ---
         _ep_r = 4.0 * size_scale
         if sx0 <= p0s[0] <= sx1 and sy0 <= p0s[1] <= sy1:
-            _draw_aa_circle(p0s[0], p0s[1], _ep_r, (0.18, 0.20, 0.26, 1.0), (0.75, 0.78, 0.85, 0.95))
+            _draw_aa_circle(p0s[0], p0s[1], _ep_r, TLFC_COLORS["endpoint_fill"], TLFC_COLORS["endpoint_outline"])
         if sx0 <= p3s[0] <= sx1 and sy0 <= p3s[1] <= sy1:
-            _draw_aa_circle(p3s[0], p3s[1], _ep_r, (0.18, 0.20, 0.26, 1.0), (0.75, 0.78, 0.85, 0.95))
+            _draw_aa_circle(p3s[0], p3s[1], _ep_r, TLFC_COLORS["endpoint_fill"], TLFC_COLORS["endpoint_outline"])
 
         # --- Handle circles (always drawn at clamped positions, always inside view) ---
         hover_handle = getattr(wm, 'tlfc_hover_handle', '')
@@ -1230,8 +1288,8 @@ def draw_editor_sidebar():
         h2_radius = 7.0 * size_scale if hover_handle == 'h2' else 5.4 * size_scale
         h1_alpha  = 1.0 if hover_handle == 'h1' else 0.92
         h2_alpha  = 1.0 if hover_handle == 'h2' else 0.92
-        _draw_aa_circle(p1s[0], p1s[1], h1_radius, (0.22, 0.84, 0.96, 1.0), (1.0, 1.0, 1.0, h1_alpha))
-        _draw_aa_circle(p2s[0], p2s[1], h2_radius, (0.96, 0.48, 0.24, 1.0), (1.0, 1.0, 1.0, h2_alpha))
+        _draw_aa_circle(p1s[0], p1s[1], h1_radius, TLFC_COLORS["handle_amp_fill"], (TLFC_COLORS["handle_outline"][0], TLFC_COLORS["handle_outline"][1], TLFC_COLORS["handle_outline"][2], h1_alpha))
+        _draw_aa_circle(p2s[0], p2s[1], h2_radius, TLFC_COLORS["handle_per_fill"], (TLFC_COLORS["handle_outline"][0], TLFC_COLORS["handle_outline"][1], TLFC_COLORS["handle_outline"][2], h2_alpha))
 
         # --- Labels for handle values, kept inside view ---
         _lbl_sz  = max(8, int(9 * size_scale))
@@ -1244,8 +1302,8 @@ def draw_editor_sidebar():
         _h2_w = blf.dimensions(0, _h2_text)[0]
         _h1x, _h1y = _label_pos(p1s[0], p1s[1], _h1_w, _lbl_h, _lbl_off, -4)
         _h2x, _h2y = _label_pos(p2s[0], p2s[1], _h2_w, _lbl_h, -_h2_w - _lbl_off, _lbl_off)
-        _draw_text(_h1x, _h1y, _h1_text, size=_lbl_sz, color=(0.22, 0.84, 0.96, 0.75))
-        _draw_text(_h2x, _h2y, _h2_text, size=_lbl_sz, color=(0.96, 0.48, 0.24, 0.75))
+        _draw_text(_h1x, _h1y, _h1_text, size=_lbl_sz, color=TLFC_COLORS["bezier_h1_label"])
+        _draw_text(_h2x, _h2y, _h2_text, size=_lbl_sz, color=TLFC_COLORS["bezier_h2_label"])
 
     area_ptr = ctx.area.as_pointer() if ctx.area else 0
     ui_map = ns.get(EDITOR_UI_KEY)
@@ -1381,10 +1439,10 @@ def draw_editor_sidebar():
                 token = _button_token("preset_apply", {"idx": idx})
                 if pressed_token == token:
                     outline = _button_state_colors("preset", "pressed")[1]
-                    _draw_aa_line_strip([(tx0, ty0), (tx1, ty0), (tx1, ty1), (tx0, ty1), (tx0, ty0)], outline, width=2.0)
+                    _draw_aa_line_strip([(tx0, ty0), (tx1, ty0), (tx1, ty1), (tx0, ty1), (tx0, ty0)], outline, width=4.0)
                 elif hover_token == token:
                     outline = _button_state_colors("preset", "hover")[1]
-                    _draw_aa_line_strip([(tx0, ty0), (tx1, ty0), (tx1, ty1), (tx0, ty1), (tx0, ty0)], outline, width=1.6)
+                    _draw_aa_line_strip([(tx0, ty0), (tx1, ty0), (tx1, ty1), (tx0, ty1), (tx0, ty0)], outline, width=3.2)
                 ui_map[area_ptr]["buttons_abs"].append({
                     "rect": (region.x + tx0, region.y + ty0, region.x + tx1, region.y + ty1),
                     "op": "preset_apply",
@@ -1499,14 +1557,14 @@ def draw_editor_sidebar():
         info_x = x0 + 10
         info_w = max(60.0, sx1 - info_x - 8)
         for line in info_lines:
-            _draw_text_clipped_left(info_x, y, info_w, line, size=info_size, color=(0.82, 0.86, 0.92, 1.0), pad=2)
+            _draw_text_clipped_left(info_x, y, info_w, line, size=info_size, color=TLFC_COLORS["info_text"], pad=2)
             y -= info_step
-        _draw_text_clipped_left(info_x, y0 + 4, info_w, "{}: {}".format(_t(wm, 'info.curves', 'Curves'), len(selected_items)), size=info_size, color=(0.75, 0.80, 0.87, 1.0), pad=2)
+        _draw_text_clipped_left(info_x, y0 + 4, info_w, "{}: {}".format(_t(wm, 'info.curves', 'Curves'), len(selected_items)), size=info_size, color=TLFC_COLORS["info_footer_text"], pad=2)
     elif wm.tlfc_show_info and side_has_space:
         info_x = x0 + 10
         info_w = max(60.0, sx1 - info_x - 8)
         info_size = 14
-        _draw_text_clipped_left(info_x, sy0 - 16, info_w, _t(wm, "info.no_selected_keys", "No selected keys."), size=info_size, color=(0.76, 0.80, 0.86, 1.0), pad=2)
+        _draw_text_clipped_left(info_x, sy0 - 16, info_w, _t(wm, "info.no_selected_keys", "No selected keys."), size=info_size, color=TLFC_COLORS["info_empty_text"], pad=2)
 
     gpu.state.blend_set('NONE')
 # ---------- Redraw timer ----------
@@ -1532,7 +1590,10 @@ def redraw_timer():
         ns[REDRAW_LOAD_EWMA_KEY] = load_ewma
         return 0.25
 
-    heavy_threshold = max(1.05, _pref_float("tlfc_redraw_load_threshold", 1.65))
+    heavy_threshold = max(
+        TLFC_PROPERTY_RANGES["tlfc_redraw_load_threshold"][0],
+        _pref_float("tlfc_redraw_load_threshold", TLFC_PROPERTY_DEFAULTS["tlfc_redraw_load_threshold"]),
+    )
     heavy_load = load_ewma >= heavy_threshold
     try:
         for w in bpy.data.window_managers:
@@ -1618,7 +1679,7 @@ def draw_tlfc_timeline_header(self, context):
     sp = context.space_data
     if not sp or sp.type != 'DOPESHEET_EDITOR' or sp.mode != 'TIMELINE':
         return
-    if not _pref_bool("tlfc_show_timeline_header_button", True):
+    if not _pref_bool("tlfc_show_timeline_header_button", _prop_default("tlfc_show_timeline_header_button")):
         return
     wm = context.window_manager
     row = self.layout.row(align=True)
@@ -1632,7 +1693,7 @@ def draw_tlfc_info_header(self, context):
     sp = context.space_data
     if not sp or sp.type != 'INFO':
         return
-    if not _pref_bool("tlfc_show_info_header_button", True):
+    if not _pref_bool("tlfc_show_info_header_button", _prop_default("tlfc_show_info_header_button")):
         return
     wm = context.window_manager
     self.layout.separator_spacer()
@@ -1876,7 +1937,7 @@ class TLFC_OT_mouse_edit_curve(bpy.types.Operator):
         if event.type == 'WHEELUPMOUSE' and inside:
             # Zoom in
             old_zoom = wm.tlfc_view_zoom
-            new_zoom = min(6.0, old_zoom * 1.15)
+            new_zoom = min(_prop_range("tlfc_view_zoom")[1], old_zoom * TLFC_UI_NUMBERS["zoom_wheel_factor"])
 
             # Zoom towards mouse cursor position
             if old_zoom > 0:
@@ -1890,7 +1951,7 @@ class TLFC_OT_mouse_edit_curve(bpy.types.Operator):
                 wm.tlfc_view_pan_y = wm.tlfc_view_pan_y * zoom_factor + (my_editor - 0.5) * (new_zoom - old_zoom)
 
                 # Apply pan limits
-                max_pan = 1.5 / max(0.1, new_zoom)
+                max_pan = TLFC_UI_NUMBERS["pan_limit_base"] / max(TLFC_UI_NUMBERS["pan_zoom_floor"], new_zoom)
                 wm.tlfc_view_pan_x = max(-max_pan, min(max_pan, wm.tlfc_view_pan_x))
                 wm.tlfc_view_pan_y = max(-max_pan, min(max_pan, wm.tlfc_view_pan_y))
 
@@ -1902,7 +1963,7 @@ class TLFC_OT_mouse_edit_curve(bpy.types.Operator):
         if event.type == 'WHEELDOWNMOUSE' and inside:
             # Zoom out
             old_zoom = wm.tlfc_view_zoom
-            new_zoom = max(0.2, old_zoom / 1.15)
+            new_zoom = max(_prop_range("tlfc_view_zoom")[0], old_zoom / TLFC_UI_NUMBERS["zoom_wheel_factor"])
 
             # Zoom towards mouse cursor position
             if old_zoom > 0:
@@ -1916,7 +1977,7 @@ class TLFC_OT_mouse_edit_curve(bpy.types.Operator):
                 wm.tlfc_view_pan_y = wm.tlfc_view_pan_y * zoom_factor + (my_editor - 0.5) * (new_zoom - old_zoom)
 
                 # Apply pan limits
-                max_pan = 1.5 / max(0.1, new_zoom)
+                max_pan = TLFC_UI_NUMBERS["pan_limit_base"] / max(TLFC_UI_NUMBERS["pan_zoom_floor"], new_zoom)
                 wm.tlfc_view_pan_x = max(-max_pan, min(max_pan, wm.tlfc_view_pan_x))
                 wm.tlfc_view_pan_y = max(-max_pan, min(max_pan, wm.tlfc_view_pan_y))
 
@@ -1949,25 +2010,27 @@ class TLFC_OT_mouse_edit_curve(bpy.types.Operator):
                 return {'PASS_THROUGH'}
             panel_x1_abs = float(ui.get("panel_x1_abs", panel_rect[2] if panel_rect else mx_abs))
             region_w = max(1.0, float(ui.get("region_w", context.region.width if context.region else 1.0)))
-            sidebar_w_px = max(160.0, min(region_w, panel_x1_abs - mx_abs))
+            sidebar_w_px = max(TLFC_UI_NUMBERS["sidebar_min_px"], min(region_w, panel_x1_abs - mx_abs))
             new_pct = (sidebar_w_px / region_w) * 100.0
-            wm.tlfc_sidebar_width = max(10.0, min(100.0, new_pct))
+            wm.tlfc_sidebar_width = _clamp_prop("tlfc_sidebar_width", new_pct)
             if context.area:
                 context.area.tag_redraw()
             return {'RUNNING_MODAL'}
 
         if event.type == 'MOUSEMOVE' and self._drag in {"h1", "h2"}:
             nx, ny = _screen_to_editor(mx, my, sx0, sy0, sx1, sy1, wm.tlfc_view_zoom, wm.tlfc_view_pan_x, wm.tlfc_view_pan_y)
-            _mode_val = getattr(wm, 'tlfc_sidebar_mode', 'BEZIER')
+            _mode_val = getattr(wm, 'tlfc_sidebar_mode', _prop_default("tlfc_sidebar_mode"))
             if _mode_val == 'ELASTIC':
-                # H1: only Y drives amplitude 0.0..1.0
-                # H2: only X drives period   0.05..1.0
                 nx = _clamp01(nx)
                 ny = _clamp01(ny)
+                if event.ctrl:
+                    nx, ny = _snap_grid(nx, ny, wm.tlfc_grid_subdiv)
+                    nx = _clamp01(nx)
+                    ny = _clamp01(ny)
                 if self._drag == "h1":
-                    wm.tlfc_elastic_amplitude = ny
+                    wm.tlfc_elastic_amplitude = _unit_to_prop("tlfc_elastic_amplitude", ny)
                 else:
-                    wm.tlfc_elastic_period = max(0.05, min(1.0, 0.05 + nx * 0.95))
+                    wm.tlfc_elastic_period = _unit_to_prop("tlfc_elastic_period", nx)
             else:
                 nx, ny = _constrain_handle(self._drag, nx, ny)
                 if event.ctrl:
@@ -2012,7 +2075,7 @@ class TLFC_OT_mouse_edit_curve(bpy.types.Operator):
             # Clamp pan to reasonable limits based on zoom
             # Allow panning to show content within (-1, -1) to (2, 2) in normalized space
             zoom = wm.tlfc_view_zoom
-            max_pan = 1.5 / max(0.1, zoom)  # More pan allowed when zoomed in
+            max_pan = TLFC_UI_NUMBERS["pan_limit_base"] / max(TLFC_UI_NUMBERS["pan_zoom_floor"], zoom)  # More pan allowed when zoomed in
             new_pan_x = max(-max_pan, min(max_pan, new_pan_x))
             new_pan_y = max(-max_pan, min(max_pan, new_pan_y))
 
@@ -2040,13 +2103,13 @@ class TLFC_OT_editor_zoom(bpy.types.Operator):
     def execute(self, context):
         wm = context.window_manager
         if self.mode == 'IN':
-            wm.tlfc_view_zoom = min(6.0, wm.tlfc_view_zoom * 1.2)
+            wm.tlfc_view_zoom = min(_prop_range("tlfc_view_zoom")[1], wm.tlfc_view_zoom * TLFC_UI_NUMBERS["zoom_button_factor"])
         elif self.mode == 'OUT':
-            wm.tlfc_view_zoom = max(0.2, wm.tlfc_view_zoom / 1.2)
+            wm.tlfc_view_zoom = max(_prop_range("tlfc_view_zoom")[0], wm.tlfc_view_zoom / TLFC_UI_NUMBERS["zoom_button_factor"])
         else:
-            wm.tlfc_view_zoom = 1.0
-            wm.tlfc_view_pan_x = 0.0
-            wm.tlfc_view_pan_y = 0.0
+            wm.tlfc_view_zoom = _prop_default("tlfc_view_zoom")
+            wm.tlfc_view_pan_x = _prop_default("tlfc_view_pan_x")
+            wm.tlfc_view_pan_y = _prop_default("tlfc_view_pan_y")
         return {'FINISHED'}
 
 
@@ -2057,10 +2120,10 @@ class TLFC_OT_apply_curve(bpy.types.Operator):
 
     def execute(self, context):
         wm = context.window_manager
-        _mode_val = getattr(wm, 'tlfc_sidebar_mode', 'BEZIER')
+        _mode_val = getattr(wm, 'tlfc_sidebar_mode', _prop_default("tlfc_sidebar_mode"))
         if _mode_val == 'ELASTIC':
-            amplitude = max(0.0, min(1.0, getattr(wm, 'tlfc_elastic_amplitude', 1.0)))
-            period = max(0.05, min(1.0, getattr(wm, 'tlfc_elastic_period', 0.3)))
+            amplitude = _clamp_prop("tlfc_elastic_amplitude", getattr(wm, 'tlfc_elastic_amplitude', _prop_default("tlfc_elastic_amplitude")))
+            period = _clamp_prop("tlfc_elastic_period", getattr(wm, 'tlfc_elastic_period', _prop_default("tlfc_elastic_period")))
             pairs = 0
             curves = set()
             for fc, k0, k1 in _iter_selected_segments(context):
@@ -2135,8 +2198,8 @@ class TLFC_OT_reset_curve(bpy.types.Operator):
 
     def execute(self, context):
         wm = context.window_manager
-        wm.tlfc_h1x, wm.tlfc_h1y = 0.333, 0.00
-        wm.tlfc_h2x, wm.tlfc_h2y = 0.667, 1.00
+        wm.tlfc_h1x, wm.tlfc_h1y = _prop_default("tlfc_h1x"), _prop_default("tlfc_h1y")
+        wm.tlfc_h2x, wm.tlfc_h2y = _prop_default("tlfc_h2x"), _prop_default("tlfc_h2y")
         return {'FINISHED'}
 
 
@@ -2164,13 +2227,13 @@ class TLFC_OT_read_curve(bpy.types.Operator):
 
         if is_elastic and k0 is not None:
             wm.tlfc_sidebar_mode = 'ELASTIC'
-            amp = float(getattr(k0, "amplitude", 1.0))
-            per = float(getattr(k0, "period", 0.3))
+            amp = float(getattr(k0, "amplitude", _prop_default("tlfc_elastic_amplitude")))
+            per = float(getattr(k0, "period", _prop_default("tlfc_elastic_period")))
             df = float(seg.get("df", 1.0))
             if abs(df) > 1e-8:
                 per = per / df
-            wm.tlfc_elastic_amplitude = max(0.0, min(1.0, amp))
-            wm.tlfc_elastic_period = max(0.05, min(1.0, per))
+            wm.tlfc_elastic_amplitude = _clamp_prop("tlfc_elastic_amplitude", amp)
+            wm.tlfc_elastic_period = _clamp_prop("tlfc_elastic_period", per)
             self.report({'INFO'}, _t(wm, "report.elastic_loaded", "Elastic curve loaded from selected key segment"))
         else:
             wm.tlfc_sidebar_mode = 'BEZIER'
@@ -2219,19 +2282,19 @@ class TLFC_AP_addon_preferences(bpy.types.AddonPreferences):
     tlfc_redraw_load_threshold: bpy.props.FloatProperty(
         name="Redraw Load Threshold",
         description="Increase redraw interval when measured redraw load exceeds this threshold",
-        default=1.65,
-        min=1.05,
-        max=5.0,
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_redraw_load_threshold"],
+        min=TLFC_PROPERTY_RANGES["tlfc_redraw_load_threshold"][0],
+        max=TLFC_PROPERTY_RANGES["tlfc_redraw_load_threshold"][1],
     )
     tlfc_show_timeline_header_button: bpy.props.BoolProperty(
         name="Show Timeline Header Button",
         description="Show Bezier editor toggle and dropdown in Timeline header",
-        default=True,
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_show_timeline_header_button"],
     )
     tlfc_show_info_header_button: bpy.props.BoolProperty(
         name="Show Info Header Button",
         description="Show Bezier editor toggle and dropdown in Info header",
-        default=True,
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_show_info_header_button"],
     )
 
     def draw(self, context):
@@ -2338,53 +2401,67 @@ def register():
         bpy.utils.register_class(c)
     bpy.types.WindowManager.tlfc_show_display_settings = bpy.props.BoolProperty(
         name="Show Display Settings",
-        default=False,
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_show_display_settings"],
     )
     bpy.types.WindowManager.tlfc_sidebar_width = bpy.props.FloatProperty(
         name="Sidebar Width",
         description="Sidebar width as percentage of timeline panel width",
-        default=34.0,
-        min=10.0,
-        max=100.0,
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_sidebar_width"],
+        min=TLFC_PROPERTY_RANGES["tlfc_sidebar_width"][0],
+        max=TLFC_PROPERTY_RANGES["tlfc_sidebar_width"][1],
         subtype='PERCENTAGE',
     )
     bpy.types.WindowManager.tlfc_outer_pad = bpy.props.IntProperty(
         name="Outer Padding",
         description="Padding in pixels between the timeline region edges and the overlay panel",
-        default=0,
-        min=0,
-        max=60,
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_outer_pad"],
+        min=TLFC_PROPERTY_RANGES["tlfc_outer_pad"][0],
+        max=TLFC_PROPERTY_RANGES["tlfc_outer_pad"][1],
     )
     bpy.types.WindowManager.tlfc_alpha = bpy.props.FloatProperty(
         name="Background Alpha",
         description="Opacity of the Bezier editor sidebar background",
-        default=1.0,
-        min=0.00,
-        max=1.0,
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_alpha"],
+        min=TLFC_PROPERTY_RANGES["tlfc_alpha"][0],
+        max=TLFC_PROPERTY_RANGES["tlfc_alpha"][1],
     )
     bpy.types.WindowManager.tlfc_samples = bpy.props.IntProperty(
         name="Curve Samples",
         description="Number of curve samples used for drawing the Bezier preview",
-        default=32,
-        min=24,
-        max=400,
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_samples"],
+        min=TLFC_PROPERTY_RANGES["tlfc_samples"][0],
+        max=TLFC_PROPERTY_RANGES["tlfc_samples"][1],
     )
     bpy.types.WindowManager.tlfc_show_info = bpy.props.BoolProperty(
         name="Toggle Info",
         description="Show selected curve diagnostics under the graph area",
-        default=True,
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_show_info"],
     )
     bpy.types.WindowManager.tlfc_display_size = bpy.props.FloatProperty(
         name="Display Size",
         description="Global size multiplier for overlay UI elements",
-        default=1.5,
-        min=0.75,
-        max=3,
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_display_size"],
+        min=TLFC_PROPERTY_RANGES["tlfc_display_size"][0],
+        max=TLFC_PROPERTY_RANGES["tlfc_display_size"][1],
     )
-    bpy.types.WindowManager.tlfc_h1x = bpy.props.FloatProperty(name="H1 X", default=0.333, min=0.0)
-    bpy.types.WindowManager.tlfc_h1y = bpy.props.FloatProperty(name="H1 Y", default=0.00)
-    bpy.types.WindowManager.tlfc_h2x = bpy.props.FloatProperty(name="H2 X", default=0.667, max=1.0)
-    bpy.types.WindowManager.tlfc_h2y = bpy.props.FloatProperty(name="H2 Y", default=1.00)
+    bpy.types.WindowManager.tlfc_h1x = bpy.props.FloatProperty(
+        name="H1 X",
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_h1x"],
+        min=TLFC_PROPERTY_RANGES["tlfc_h1x"][0],
+    )
+    bpy.types.WindowManager.tlfc_h1y = bpy.props.FloatProperty(
+        name="H1 Y",
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_h1y"],
+    )
+    bpy.types.WindowManager.tlfc_h2x = bpy.props.FloatProperty(
+        name="H2 X",
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_h2x"],
+        max=TLFC_PROPERTY_RANGES["tlfc_h2x"][1],
+    )
+    bpy.types.WindowManager.tlfc_h2y = bpy.props.FloatProperty(
+        name="H2 Y",
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_h2y"],
+    )
     bpy.types.WindowManager.tlfc_sidebar_mode = bpy.props.EnumProperty(
         name="Sidebar Mode",
         description="Active easing editor mode",
@@ -2392,65 +2469,110 @@ def register():
             ('BEZIER',  'Bezier',  'Bezier curve editor'),
             ('ELASTIC', 'Elastic', 'Elastic ease-out editor'),
         ],
-        default='BEZIER',
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_sidebar_mode"],
     )
     bpy.types.WindowManager.tlfc_elastic_amplitude = bpy.props.FloatProperty(
         name="Elastic Amplitude",
         description="Overshoot factor",
-        default=1.0,
-        min=0.0,
-        max=1.0,
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_elastic_amplitude"],
+        min=TLFC_PROPERTY_RANGES["tlfc_elastic_amplitude"][0],
+        max=TLFC_PROPERTY_RANGES["tlfc_elastic_amplitude"][1],
     )
     bpy.types.WindowManager.tlfc_elastic_period = bpy.props.FloatProperty(
         name="Elastic Period",
         description="Oscillation period",
-        default=0.3,
-        min=0.05,
-        max=1.0,
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_elastic_period"],
+        min=TLFC_PROPERTY_RANGES["tlfc_elastic_period"][0],
+        max=TLFC_PROPERTY_RANGES["tlfc_elastic_period"][1],
     )
     bpy.types.WindowManager.tlfc_grid_subdiv = bpy.props.IntProperty(
         name="Grid Subdivisions",
         description="Grid density for the normalized editor view",
-        default=4,
-        min=1,
-        max=64,
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_grid_subdiv"],
+        min=TLFC_PROPERTY_RANGES["tlfc_grid_subdiv"][0],
+        max=TLFC_PROPERTY_RANGES["tlfc_grid_subdiv"][1],
     )
     bpy.types.WindowManager.tlfc_auto_apply = bpy.props.BoolProperty(
         name="Auto Apply",
         description="Automatically apply handle edits to selected keyframe segments while dragging",
-        default=False,
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_auto_apply"],
     )
-    bpy.types.WindowManager.tlfc_snap_threshold = bpy.props.FloatProperty(name="Edge Snap Threshold", default=0.1, min=0.0, max=1.0, options={'HIDDEN'})
-    bpy.types.WindowManager.tlfc_view_zoom = bpy.props.FloatProperty(name="View Zoom", default=1.0, min=0.2, max=6.0)
-    bpy.types.WindowManager.tlfc_view_pan_x = bpy.props.FloatProperty(name="View Pan X", default=0.0)
-    bpy.types.WindowManager.tlfc_view_pan_y = bpy.props.FloatProperty(name="View Pan Y", default=0.0)
-    bpy.types.WindowManager.tlfc_pan_start_x = bpy.props.FloatProperty(name="Pan Start X", default=0.0, options={'HIDDEN'})
-    bpy.types.WindowManager.tlfc_pan_start_y = bpy.props.FloatProperty(name="Pan Start Y", default=0.0, options={'HIDDEN'})
-    bpy.types.WindowManager.tlfc_pan_origin_x = bpy.props.FloatProperty(name="Pan Origin X", default=0.0, options={'HIDDEN'})
-    bpy.types.WindowManager.tlfc_pan_origin_y = bpy.props.FloatProperty(name="Pan Origin Y", default=0.0, options={'HIDDEN'})
+    bpy.types.WindowManager.tlfc_snap_threshold = bpy.props.FloatProperty(
+        name="Edge Snap Threshold",
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_snap_threshold"],
+        min=TLFC_PROPERTY_RANGES["tlfc_snap_threshold"][0],
+        max=TLFC_PROPERTY_RANGES["tlfc_snap_threshold"][1],
+        options={'HIDDEN'},
+    )
+    bpy.types.WindowManager.tlfc_view_zoom = bpy.props.FloatProperty(
+        name="View Zoom",
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_view_zoom"],
+        min=TLFC_PROPERTY_RANGES["tlfc_view_zoom"][0],
+        max=TLFC_PROPERTY_RANGES["tlfc_view_zoom"][1],
+    )
+    bpy.types.WindowManager.tlfc_view_pan_x = bpy.props.FloatProperty(
+        name="View Pan X",
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_view_pan_x"],
+    )
+    bpy.types.WindowManager.tlfc_view_pan_y = bpy.props.FloatProperty(
+        name="View Pan Y",
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_view_pan_y"],
+    )
+    bpy.types.WindowManager.tlfc_pan_start_x = bpy.props.FloatProperty(
+        name="Pan Start X",
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_pan_start_x"],
+        options={'HIDDEN'},
+    )
+    bpy.types.WindowManager.tlfc_pan_start_y = bpy.props.FloatProperty(
+        name="Pan Start Y",
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_pan_start_y"],
+        options={'HIDDEN'},
+    )
+    bpy.types.WindowManager.tlfc_pan_origin_x = bpy.props.FloatProperty(
+        name="Pan Origin X",
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_pan_origin_x"],
+        options={'HIDDEN'},
+    )
+    bpy.types.WindowManager.tlfc_pan_origin_y = bpy.props.FloatProperty(
+        name="Pan Origin Y",
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_pan_origin_y"],
+        options={'HIDDEN'},
+    )
     bpy.types.WindowManager.tlfc_mouse_editing = bpy.props.BoolProperty(
         name="Mouse Edit",
-        default=False,
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_mouse_editing"],
         options={'HIDDEN'},
     )
     bpy.types.WindowManager.tlfc_hover_sidebar = bpy.props.BoolProperty(
         name="Hover Sidebar",
-        default=False,
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_hover_sidebar"],
         options={'HIDDEN'},
     )
     bpy.types.WindowManager.tlfc_hover_sidebar_edge = bpy.props.BoolProperty(
         name="Hover Sidebar Edge",
-        default=False,
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_hover_sidebar_edge"],
         options={'HIDDEN'},
     )
     bpy.types.WindowManager.tlfc_dragging_sidebar = bpy.props.BoolProperty(
         name="Dragging Sidebar",
-        default=False,
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_dragging_sidebar"],
         options={'HIDDEN'},
     )
-    bpy.types.WindowManager.tlfc_hover_button = bpy.props.StringProperty(name="Hover Button", default="", options={'HIDDEN'})
-    bpy.types.WindowManager.tlfc_pressed_button = bpy.props.StringProperty(name="Pressed Button", default="", options={'HIDDEN'})
-    bpy.types.WindowManager.tlfc_hover_handle = bpy.props.StringProperty(name="Hover Handle", default="", options={'HIDDEN'})
+    bpy.types.WindowManager.tlfc_hover_button = bpy.props.StringProperty(
+        name="Hover Button",
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_hover_button"],
+        options={'HIDDEN'},
+    )
+    bpy.types.WindowManager.tlfc_pressed_button = bpy.props.StringProperty(
+        name="Pressed Button",
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_pressed_button"],
+        options={'HIDDEN'},
+    )
+    bpy.types.WindowManager.tlfc_hover_handle = bpy.props.StringProperty(
+        name="Hover Handle",
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_hover_handle"],
+        options={'HIDDEN'},
+    )
     bpy.types.DOPESHEET_HT_header.append(draw_tlfc_timeline_header)
     bpy.types.INFO_HT_header.append(draw_tlfc_info_header)
 def unregister():

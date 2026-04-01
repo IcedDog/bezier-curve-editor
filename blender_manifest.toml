@@ -1,9 +1,11 @@
 schema_version = "1.0.0"
 id = "bezier_curve_editor"
-version = "1.0.3"
+version = "1.0.4"
 name = "Bezier Curve Editor"
 tagline = "An editor for editing and applying easing curves"
 maintainer = "IcedDog"
 type = "add-on"
+tags = ["Animation", "User Interface"]
+website = "https://extensions.blender.org/add-ons/bezier-curve-editor/"
 blender_version_min = "4.2.0"
 license = ["SPDX:GPL-3.0-or-later"]
