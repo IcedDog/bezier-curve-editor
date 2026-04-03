@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.blend
+*.blend1
+*.blend2
+*.log
