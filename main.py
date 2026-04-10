@@ -11,6 +11,7 @@ from .translation import translations_dict
 from .config import (
     ADDON_KEY,
     INFO_ADDON_KEY,
+    GRAPH_ADDON_KEY,
     EDITOR_UI_KEY,
     ENABLED_AREAS_KEY,
     PRESET_FILE,
@@ -101,6 +102,13 @@ def _pref_float(name, default=0.0):
     return float(getattr(prefs, name, default))
 
 
+def _sync_graph_height_to_prefs(self, context):
+    """Update callback: persist graph height ratio to addon preferences."""
+    prefs = _addon_prefs()
+    if prefs is not None:
+        prefs.tlfc_graph_height_ratio = self.tlfc_graph_height_ratio
+
+
 def _set_editor_enabled_exclusive(area):
     key = _area_key(area)
     if key == 0:
@@ -120,7 +128,7 @@ def _tag_redraw_dopesheet():
                 if not scr:
                     continue
                 for area in scr.areas:
-                    if area.type in {'DOPESHEET_EDITOR', 'INFO'}:
+                    if area.type in {'DOPESHEET_EDITOR', 'INFO', 'GRAPH_EDITOR'}:
                         area.tag_redraw()
     except Exception:
         pass
@@ -129,9 +137,7 @@ def _tag_redraw_dopesheet():
 def _supports_editor_space(space):
     if not space:
         return False
-    if space.type == 'DOPESHEET_EDITOR':
-        return getattr(space, "mode", None) == 'TIMELINE'
-    return space.type == 'INFO'
+    return space.type in {'DOPESHEET_EDITOR', 'INFO', 'GRAPH_EDITOR'}
 
 
 def _enabled_areas_map():
@@ -173,7 +179,7 @@ def _any_timeline_editor_enabled():
                 if not scr:
                     continue
                 for area in scr.areas:
-                    if area.type not in {'DOPESHEET_EDITOR', 'INFO'}:
+                    if area.type not in {'DOPESHEET_EDITOR', 'INFO', 'GRAPH_EDITOR'}:
                         continue
                     sp = area.spaces.active
                     if not _supports_editor_space(sp):
@@ -1210,17 +1216,30 @@ def draw_editor_sidebar():
     tab_y0 = tab_y1 - tab_h_val
 
     # Easing editor graph — height is ratio-driven for proportional scaling.
+    # The curve widget is the most important UI element: guarantee a minimum
+    # size so that it is never "crushed" by surrounding buttons.
     pad = 12
     sx0 = x0 + pad
     sx1_limit = x1 - pad
     sy1 = tab_y0 - tab_gap_below
     extra_tab_space = tab_h_val + tab_gap_below
     available_h = max(80, (y1 - y0) - extra_tab_space - 10)
-    graph_ratio = getattr(wm, 'tlfc_graph_height_ratio', _prop_default("tlfc_graph_height_ratio"))
-    graph_h = max(60, int(available_h * graph_ratio))
-    sq = min(graph_h, sx1_limit - sx0)
-    sx1 = sx0 + sq
-    sy0 = sy1 - sq
+    # Read graph ratio from addon preferences (persistent) with WM fallback.
+    graph_ratio = _pref_float("tlfc_graph_height_ratio", getattr(wm, 'tlfc_graph_height_ratio', _prop_default("tlfc_graph_height_ratio")))
+    # Guarantee at least 80px for the curve widget so it stays functional
+    # even when the window is very short vertically.
+    graph_h = max(80, int(available_h * graph_ratio))
+    graph_w = min(graph_h, sx1_limit - sx0)
+    # Allow the graph to be taller than wide (rectangular) so it
+    # fills available vertical space instead of wasting it.
+    graph_actual_h = graph_h
+    # Clamp so the graph never extends below the panel's bottom reserve
+    # (apply button height + padding).
+    min_bottom = y0 + 50
+    if sy1 - graph_actual_h < min_bottom:
+        graph_actual_h = max(40, int(sy1 - min_bottom))
+    sx1 = sx0 + graph_w
+    sy0 = sy1 - graph_actual_h
 
     _draw_rect(sx0, sy0, sx1, sy1, C["graph_bg"])
     _draw_aa_line_strip([(sx0, sy0), (sx1, sy0), (sx1, sy1), (sx0, sy1), (sx0, sy0)], C["preset_preview_border"], width=1.0)
@@ -1511,10 +1530,10 @@ def draw_editor_sidebar():
     # Draw interactive overlay buttons with responsive placement.
     bx0 = sx1 + 12
     bx1 = x1 - 10
-    gap = max(4, int(6 * size_scale))
-    row_h = max(18, int(22 * size_scale))
+    gap = max(3, int(4 * size_scale))
+    row_h = max(16, int(20 * size_scale))
     btn_font = max(9, int(10 * size_scale))
-    apply_h = max(24, int(30 * size_scale))
+    apply_h = max(22, int(26 * size_scale))
     tile = max(38, int(46 * size_scale))
     presets = _load_presets()
     side_has_space = (bx1 - bx0) > 80
@@ -1555,6 +1574,9 @@ def draw_editor_sidebar():
                 rx1 = bx1
                 ry1 = by
                 ry0 = ry1 - row_h
+                # Skip buttons that would overlap the APPLY button.
+                if ry0 < ay1 + gap:
+                    break
                 token = _button_token(b["op"], b["kwargs"])
                 state = "pressed" if pressed_token == token else ("hover" if hover_token == token else "normal")
                 kind = "auto_on" if (b["op"] == "toggle_auto" and wm.tlfc_auto_apply) else ("auto_off" if b["op"] == "toggle_auto" else "default")
@@ -1573,11 +1595,14 @@ def draw_editor_sidebar():
             for row in _overlay_buttons(wm):
                 cols = len(row)
                 cell_w = (bx1 - bx0 - gap * (cols - 1)) / max(1, cols)
+                ry1 = by
+                ry0 = ry1 - row_h
+                # Skip row if it would overlap the APPLY button.
+                if ry0 < ay1 + gap:
+                    break
                 for i, b in enumerate(row):
                     rx0 = bx0 + i * (cell_w + gap)
                     rx1 = rx0 + cell_w
-                    ry1 = by
-                    ry0 = ry1 - row_h
                     token = _button_token(b["op"], b["kwargs"])
                     state = "pressed" if pressed_token == token else ("hover" if hover_token == token else "normal")
                     kind = "auto_on" if (b["op"] == "toggle_auto" and wm.tlfc_auto_apply) else ("auto_off" if b["op"] == "toggle_auto" else "default")
@@ -1629,7 +1654,8 @@ def draw_editor_sidebar():
             cell_w = (ux1 - ux0 - gap * (cols - 1)) / max(1, cols)
             ry1 = by
             ry0 = ry1 - row_h
-            if ry0 < y0 + 50:
+            # Drop button rows that would overlap the APPLY button area.
+            if ry0 < y0 + apply_h + 20:
                 break
             for i, b in enumerate(row):
                 rx0 = ux0 + i * (cell_w + gap)
@@ -1772,7 +1798,7 @@ def redraw_timer():
                 if not scr:
                     continue
                 for area in scr.areas:
-                    if area.type in {'DOPESHEET_EDITOR', 'INFO'}:
+                    if area.type in {'DOPESHEET_EDITOR', 'INFO', 'GRAPH_EDITOR'}:
                         area.tag_redraw()
     except Exception:
         pass
@@ -1848,7 +1874,7 @@ class TLFC_PT_editor_header_dropdown(bpy.types.Panel):
 
 def draw_tlfc_timeline_header(self, context):
     sp = context.space_data
-    if not sp or sp.type != 'DOPESHEET_EDITOR' or sp.mode != 'TIMELINE':
+    if not sp or sp.type != 'DOPESHEET_EDITOR':
         return
     if not _pref_bool("tlfc_show_timeline_header_button", _prop_default("tlfc_show_timeline_header_button")):
         return
@@ -1874,6 +1900,79 @@ def draw_tlfc_info_header(self, context):
     icon = 'IPO_BEZIER'
     row.operator("tlfc.toggle_editor_mode", text="", icon=icon, depress=is_on)
     row.popover(panel="TLFC_PT_editor_header_dropdown", text="")
+
+
+class TLFC_PT_graph_editor_header_dropdown(bpy.types.Panel):
+    bl_space_type = 'GRAPH_EDITOR'
+    bl_region_type = 'HEADER'
+    bl_label = 'Bezier Editor Settings'
+
+    @classmethod
+    def poll(cls, context):
+        sp = context.space_data
+        return _supports_editor_space(sp)
+
+    def draw(self, context):
+        layout = self.layout
+        wm = context.window_manager
+        sp = context.space_data
+
+        col = layout.column(align=True)
+        col.label(text=_t(wm, "panel.display", "Display"))
+        col.prop(wm, "tlfc_sidebar_width", text=_t(wm, "panel.sidebar_width", "Sidebar Width"))
+        col.prop(wm, "tlfc_outer_pad", text=_t(wm, "panel.outer_padding", "Outer Padding"))
+        col.prop(wm, "tlfc_alpha", text=_t(wm, "panel.background_alpha", "Background Alpha"))
+        col.prop(wm, "tlfc_graph_height_ratio", text=_t(wm, "panel.graph_height_ratio", "Graph Height Ratio"))
+        col.prop(wm, "tlfc_samples", text=_t(wm, "panel.curve_samples", "Curve Samples"))
+        col.prop(wm, "tlfc_display_size", text=_t(wm, "panel.display_size", "Display Size"))
+        tog = col.row(align=True)
+        tog.prop(wm, "tlfc_show_info", text=_t(wm, "panel.show_info", "Show Info"))
+        tog.prop(wm, "tlfc_auto_apply", text=_t(wm, "panel.auto_apply", "Auto Apply"))
+        col.prop(wm, "tlfc_grid_subdiv", text=_t(wm, "panel.grid_subdivisions", "Grid Subdivisions"))
+
+        col.separator()
+        col.label(text=_t(wm, "panel.editor", "Editor"))
+        h1 = col.row(align=True)
+        h1.prop(wm, "tlfc_h1x")
+        h1.prop(wm, "tlfc_h1y")
+        h2 = col.row(align=True)
+        h2.prop(wm, "tlfc_h2x")
+        h2.prop(wm, "tlfc_h2y")
+
+        col.separator()
+        nav = col.row(align=True)
+        nav.operator("tlfc.editor_zoom", text=_t(wm, "button.zoom_in", "Zoom +")).mode = 'IN'
+        nav.operator("tlfc.editor_zoom", text=_t(wm, "button.zoom_out", "Zoom -")).mode = 'OUT'
+        nav.operator("tlfc.editor_zoom", text=_t(wm, "button.center", "Center")).mode = 'CENTER'
+
+        ease = col.row(align=True)
+        ease.operator("tlfc.set_interpolation", text=_t(wm, "button.linear", "Linear")).mode = 'LINEAR'
+        ease.operator("tlfc.set_interpolation", text=_t(wm, "button.constant", "Constant")).mode = 'CONSTANT'
+        ease.operator("tlfc.mirror_curve", text=_t(wm, "button.mirror", "Mirror"))
+        ease.operator("tlfc.reset_curve", text=_t(wm, "button.reset", "Reset"))
+
+        col.operator("tlfc.read_curve", text=_t(wm, "panel.read_curve", "Read curve from Keyframe"))
+        col.operator("tlfc.save_preset", text=_t(wm, "button.save_preset", "Save Preset"))
+        col.operator("tlfc.open_preset_file", text=_t(wm, "panel.open_preset_file", "Open Preset File"))
+
+        col.separator()
+        apply_row = col.row()
+        apply_row.scale_y = 1.5
+        apply_row.operator("tlfc.apply_curve", text=_t(wm, "button.apply_curve", "APPLY CURVE"))
+
+
+def draw_tlfc_graph_header(self, context):
+    sp = context.space_data
+    if not sp or sp.type != 'GRAPH_EDITOR':
+        return
+    if not _pref_bool("tlfc_show_graph_header_button", _prop_default("tlfc_show_graph_header_button")):
+        return
+    wm = context.window_manager
+    row = self.layout.row(align=True)
+    is_on = _is_editor_enabled(context.area) and wm.tlfc_mouse_editing
+    icon = 'IPO_BEZIER'
+    row.operator("tlfc.toggle_editor_mode", text="", icon=icon, depress=is_on)
+    row.popover(panel="TLFC_PT_graph_editor_header_dropdown", text="")
 
 
 class TLFC_OT_toggle_editor_mode(bpy.types.Operator):
@@ -2055,9 +2154,11 @@ class TLFC_OT_mouse_edit_curve(bpy.types.Operator):
                 break
         wm.tlfc_hover_button = hovered_token
 
-        # Graph separator hover detection
+        # Graph separator hover detection — suppress when a handle is hovered
+        # so the user can grab handles near the separator without accidentally resizing.
         sep_rect = ui.get("graph_sep_abs")
-        wm.tlfc_hover_graph_sep = _point_in_rect(mx_abs, my_abs, sep_rect) if sep_rect else False
+        handle_nearby = (wm.tlfc_hover_handle != "")
+        wm.tlfc_hover_graph_sep = (not handle_nearby) and (_point_in_rect(mx_abs, my_abs, sep_rect) if sep_rect else False)
 
         if self._drag == "sidebar" or getattr(wm, "tlfc_dragging_sidebar", False):
             self._set_modal_cursor(context, 'MOVE_X')
@@ -2077,11 +2178,8 @@ class TLFC_OT_mouse_edit_curve(bpy.types.Operator):
                 wm.tlfc_pressed_button = ""
                 return {'RUNNING_MODAL'}
 
-            if wm.tlfc_hover_graph_sep:
-                self._drag = "graph_sep"
-                wm.tlfc_pressed_button = ""
-                return {'RUNNING_MODAL'}
-
+            # Handles take priority over the separator to prevent accidental
+            # resize when grabbing a handle near the bottom of the graph.
             h1 = ui["h1_abs"]
             h2 = ui["h2_abs"]
             d1 = (mx_abs - h1[0]) * (mx_abs - h1[0]) + (my_abs - h1[1]) * (my_abs - h1[1])
@@ -2092,6 +2190,11 @@ class TLFC_OT_mouse_edit_curve(bpy.types.Operator):
                 return {'RUNNING_MODAL'}
             if d2 <= handle_hit_sq:
                 self._drag = "h2"
+                wm.tlfc_pressed_button = ""
+                return {'RUNNING_MODAL'}
+
+            if wm.tlfc_hover_graph_sep:
+                self._drag = "graph_sep"
                 wm.tlfc_pressed_button = ""
                 return {'RUNNING_MODAL'}
 
@@ -2239,7 +2342,7 @@ class TLFC_OT_mouse_edit_curve(bpy.types.Operator):
                         if not scr:
                             continue
                         for area in scr.areas:
-                            if area.type in {'DOPESHEET_EDITOR', 'INFO'}:
+                            if area.type in {'DOPESHEET_EDITOR', 'INFO', 'GRAPH_EDITOR'}:
                                 area.tag_redraw()
             except Exception:
                 if context.area:
@@ -2253,7 +2356,12 @@ class TLFC_OT_mouse_edit_curve(bpy.types.Operator):
             # sy1_abs is the top of the graph area in window space.
             # (sy1_abs - my_abs) is the current height of the graph.
             new_ratio = (sy1_abs - my_abs) / available_h
-            wm.tlfc_graph_height_ratio = _clamp_prop("tlfc_graph_height_ratio", new_ratio)
+            clamped = _clamp_prop("tlfc_graph_height_ratio", new_ratio)
+            wm.tlfc_graph_height_ratio = clamped
+            # Persist to addon preferences so it survives restarts.
+            prefs = _addon_prefs()
+            if prefs is not None:
+                prefs.tlfc_graph_height_ratio = clamped
             if context.area:
                 context.area.tag_redraw()
             return {'RUNNING_MODAL'}
@@ -2490,6 +2598,19 @@ class TLFC_AP_addon_preferences(bpy.types.AddonPreferences):
         description="Show Bezier editor toggle and dropdown in Info header",
         default=TLFC_PROPERTY_DEFAULTS["tlfc_show_info_header_button"],
     )
+    tlfc_show_graph_header_button: bpy.props.BoolProperty(
+        name="Show Graph Header Button",
+        description="Show Bezier editor toggle and dropdown in Graph Editor header",
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_show_graph_header_button"],
+    )
+    tlfc_graph_height_ratio: bpy.props.FloatProperty(
+        name="Graph Height Ratio",
+        description="Height of the editor graph as a ratio of available panel height (persistent)",
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_graph_height_ratio"],
+        min=TLFC_PROPERTY_RANGES["tlfc_graph_height_ratio"][0],
+        max=TLFC_PROPERTY_RANGES["tlfc_graph_height_ratio"][1],
+        subtype='FACTOR',
+    )
 
     def draw(self, context):
         layout = self.layout
@@ -2500,6 +2621,7 @@ class TLFC_AP_addon_preferences(bpy.types.AddonPreferences):
         rowB = col.row(align=True)
         rowB.prop(self, "tlfc_show_timeline_header_button", text=_t(wm, "prefs.show_timeline_button", "Show Timeline Header Button"))
         rowB.prop(self, "tlfc_show_info_header_button", text=_t(wm, "prefs.show_info_button", "Show Info Header Button"))
+        rowB.prop(self, "tlfc_show_graph_header_button", text=_t(wm, "prefs.show_graph_button", "Show Graph Header Button"))
 
 
 classes = (
@@ -2515,6 +2637,7 @@ classes = (
     TLFC_OT_save_preset,
     TLFC_OT_open_preset_file,
     TLFC_PT_editor_header_dropdown,
+    TLFC_PT_graph_editor_header_dropdown,
 )
 def _cleanup_previous():
     ns = bpy.app.driver_namespace
@@ -2532,6 +2655,13 @@ def _cleanup_previous():
         except Exception:
             pass
         ns.pop(INFO_ADDON_KEY, None)
+    old_graph_handle = ns.get(GRAPH_ADDON_KEY)
+    if old_graph_handle is not None:
+        try:
+            bpy.types.SpaceGraphEditor.draw_handler_remove(old_graph_handle, 'WINDOW')
+        except Exception:
+            pass
+        ns.pop(GRAPH_ADDON_KEY, None)
     if bpy.app.timers.is_registered(redraw_timer):
         try:
             bpy.app.timers.unregister(redraw_timer)
@@ -2558,6 +2688,14 @@ def _disable_runtime_handlers(clear_ui=True):
             pass
         ns.pop(INFO_ADDON_KEY, None)
 
+    old_graph_handle = ns.get(GRAPH_ADDON_KEY)
+    if old_graph_handle is not None:
+        try:
+            bpy.types.SpaceGraphEditor.draw_handler_remove(old_graph_handle, 'WINDOW')
+        except Exception:
+            pass
+        ns.pop(GRAPH_ADDON_KEY, None)
+
     if bpy.app.timers.is_registered(redraw_timer):
         try:
             bpy.app.timers.unregister(redraw_timer)
@@ -2581,6 +2719,12 @@ def _ensure_runtime_handlers():
             draw_editor_sidebar, (), 'WINDOW', 'POST_PIXEL'
         )
         ns[INFO_ADDON_KEY] = info_handle
+
+    if ns.get(GRAPH_ADDON_KEY) is None:
+        graph_handle = bpy.types.SpaceGraphEditor.draw_handler_add(
+            draw_editor_sidebar, (), 'WINDOW', 'POST_PIXEL'
+        )
+        ns[GRAPH_ADDON_KEY] = graph_handle
 
     if not bpy.app.timers.is_registered(redraw_timer):
         bpy.app.timers.register(redraw_timer, first_interval=0.1)
@@ -2672,6 +2816,7 @@ def register():
         min=TLFC_PROPERTY_RANGES["tlfc_graph_height_ratio"][0],
         max=TLFC_PROPERTY_RANGES["tlfc_graph_height_ratio"][1],
         subtype='FACTOR',
+        update=_sync_graph_height_to_prefs,
     )
     bpy.types.WindowManager.tlfc_hover_graph_sep = bpy.props.BoolProperty(
         name="Hover Graph Separator",
@@ -2782,15 +2927,62 @@ def register():
     )
     bpy.types.DOPESHEET_HT_header.append(draw_tlfc_timeline_header)
     bpy.types.INFO_HT_header.append(draw_tlfc_info_header)
+    bpy.types.GRAPH_HT_header.append(draw_tlfc_graph_header)
+
+    # Restore persistent graph height ratio from addon preferences.
+    if _on_load_post not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(_on_load_post)
+    # Also initialize on register (first-time enable) via a deferred timer
+    # since WindowManager instance isn't fully ready at register time.
+    if not bpy.app.timers.is_registered(_init_persistent_props):
+        bpy.app.timers.register(_init_persistent_props, first_interval=0.1)
+
+def _init_persistent_props():
+    """Deferred one-shot: copy persistent addon-pref values to the WM runtime properties."""
+    try:
+        prefs = _addon_prefs()
+        if prefs is not None:
+            wm = bpy.context.window_manager
+            wm.tlfc_graph_height_ratio = prefs.tlfc_graph_height_ratio
+    except Exception:
+        pass
+    return None  # None = don't repeat
+
+@bpy.app.handlers.persistent
+def _on_load_post(dummy):
+    """Restore persistent properties after a blend file is loaded."""
+    try:
+        prefs = _addon_prefs()
+        if prefs is not None:
+            wm = bpy.context.window_manager
+            wm.tlfc_graph_height_ratio = prefs.tlfc_graph_height_ratio
+    except Exception:
+        pass
+
 def unregister():
     bpy.app.translations.unregister(ADDON_MODULE_KEY)
     _cleanup_previous()
+    # Remove the persistent load handler.
+    try:
+        bpy.app.handlers.load_post.remove(_on_load_post)
+    except (ValueError, Exception):
+        pass
+    # Remove the deferred init timer if it's still pending.
+    if bpy.app.timers.is_registered(_init_persistent_props):
+        try:
+            bpy.app.timers.unregister(_init_persistent_props)
+        except Exception:
+            pass
     try:
         bpy.types.DOPESHEET_HT_header.remove(draw_tlfc_timeline_header)
     except Exception:
         pass
     try:
         bpy.types.INFO_HT_header.remove(draw_tlfc_info_header)
+    except Exception:
+        pass
+    try:
+        bpy.types.GRAPH_HT_header.remove(draw_tlfc_graph_header)
     except Exception:
         pass
     try:

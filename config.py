@@ -1,5 +1,6 @@
 ADDON_KEY = "TLFC_EDITOR_HANDLE"
 INFO_ADDON_KEY = "TLFC_INFO_EDITOR_HANDLE"
+GRAPH_ADDON_KEY = "TLFC_GRAPH_EDITOR_HANDLE"
 EDITOR_UI_KEY = "TLFC_EDITOR_UI"
 ENABLED_AREAS_KEY = "TLFC_ENABLED_AREAS"
 PRESET_FILE = "curve_presets.txt"
@@ -17,6 +18,7 @@ TLFC_PROPERTY_DEFAULTS = {
 	"tlfc_redraw_load_threshold": 1.65,
 	"tlfc_show_timeline_header_button": True,
 	"tlfc_show_info_header_button": True,
+	"tlfc_show_graph_header_button": True,
 	"tlfc_show_display_settings": False,
 	"tlfc_sidebar_width": 34.0,
 	"tlfc_outer_pad": 0,
@@ -48,7 +50,7 @@ TLFC_PROPERTY_DEFAULTS = {
 	"tlfc_hover_button": "",
 	"tlfc_pressed_button": "",
 	"tlfc_hover_handle": "",
-	"tlfc_graph_height_ratio": 0.52,
+	"tlfc_graph_height_ratio": 0.75,
 	"tlfc_hover_graph_sep": False,
 }
 
