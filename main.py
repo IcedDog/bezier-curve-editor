@@ -562,160 +562,122 @@ def _theme_colors():
     """Read colors from the active Blender theme, returning a dict with the same
     keys as TLFC_COLORS. Falls back to TLFC_COLORS values for any slot that
     cannot be read from the theme."""
-    C = dict(TLFC_COLORS)  # start with fallback values
-    
+    colors = dict(TLFC_COLORS)
+
     try:
         theme = bpy.context.preferences.themes[0]
         ui = theme.user_interface
-        ds = theme.dopesheet_editor
     except Exception as e:
         print(f"[TLFC] Failed to access theme: {e}")
-        return C
+        return colors
 
-    def _c4(src, alpha=1.0):
-        try:
-            r, g, b = float(src[0]), float(src[1]), float(src[2])
-            a = float(src[3]) if len(src) > 3 else alpha
-            return (r, g, b, a)
-        except Exception:
+    def _rgba(value, alpha=1.0):
+        if value is None:
             return None
+        try:
+            seq = tuple(float(v) for v in value)
+        except Exception:
+            try:
+                seq = (float(value.r), float(value.g), float(value.b))
+            except Exception:
+                return None
+        if len(seq) < 3:
+            return None
+        a = float(seq[3]) if len(seq) > 3 else float(alpha)
+        return (seq[0], seq[1], seq[2], a)
 
-    def _at_a(c, a):
-        return (c[0], c[1], c[2], a) if c else None
+    def _alpha(c, a):
+        return (c[0], c[1], c[2], float(a)) if c else None
 
-    def _darken(c, f):
+    def _shade(c, f):
         return (c[0] * f, c[1] * f, c[2] * f, c[3]) if c else None
 
-    try:
-        space_back  = _c4(ds.space.back, 1.0)
-    except Exception:
-        space_back = None
-        
-    try:
-        grid_c      = _c4(ds.grid, 1.0)
-    except Exception:
-        grid_c = None
-        
-    try:
-        frame_cur   = _c4(ds.frame_current, 1.0)
-    except Exception:
-        frame_cur = None
-        
-    try:
-        scrub = _c4(ds.time_scrub_line, 1.0)
-    except Exception:
-        scrub = frame_cur
-        
-    try:
-        reg_inner   = _c4(ui.wcol_regular.inner, 0.88)
-    except Exception:
-        reg_inner = None
-        
-    try:
-        reg_text    = _c4(ui.wcol_regular.text, 1.0)
-    except Exception:
-        reg_text = None
-        
-    try:
-        reg_outline = _c4(ui.wcol_regular.outline, 0.95)
-    except Exception:
-        reg_outline = None
-        
-    try:
-        tab_inner   = _c4(ui.wcol_tab.inner, 0.88)
-    except Exception:
-        tab_inner = None
-        
-    try:
-        tab_inner_s = _c4(ui.wcol_tab.inner_sel, 0.95)
-    except Exception:
-        tab_inner_s = None
-        
-    try:
-        tab_text    = _c4(ui.wcol_tab.text, 1.0)
-    except Exception:
-        tab_text = None
-        
-    try:
-        tab_text_s  = _c4(ui.wcol_tab.text_sel, 1.0)
-    except Exception:
-        tab_text_s = None
-        
-    try:
-        key_inner = _c4(ui.wcol_state.inner_key, 0.95)
-    except Exception:
-        key_inner = None
+    def _pick(path, alpha=1.0):
+        obj = theme
+        for part in path.split("."):
+            obj = getattr(obj, part, None)
+            if obj is None:
+                return None
+        return _rgba(obj, alpha)
+    
+    reg_inner = _pick("user_interface.wcol_regular.inner")
+    reg_inner_sel = _pick("user_interface.wcol_regular.inner_sel")
+    reg_text = _pick("user_interface.wcol_regular.text")
+    reg_text_sel = _pick("user_interface.wcol_regular.text_sel")
+    reg_outline = _pick("user_interface.wcol_regular.outline")
+    reg_outline_sel = _pick("user_interface.wcol_regular.outline_sel") 
+    
+    tab_inner = _pick("user_interface.wcol_tab.inner")
+    tab_inner_sel = _pick("user_interface.wcol_tab.inner_sel")
+    tab_text = _pick("user_interface.wcol_tab.text")
+    tab_text_sel = _pick("user_interface.wcol_tab.text_sel")
+    tab_outline = _pick("user_interface.wcol_tab.outline")
+    
+    state_overridden = _pick("user_interface.wcol_state.inner_overridden")
+    state_changed = _pick("user_interface.wcol_state.inner_changed")
+    
+    menubg_inner = _pick("user_interface.wcol_menu_back.inner")    
+    menu_inner = _pick("user_interface.wcol_menu.inner")
+    menu_outline = _pick("user_interface.wcol_menu.outline")
 
-    if space_back:
-        C["panel_bg"]          = _at_a(space_back, 1.0)
-        dark_bg                = _darken(space_back, 0.55)
-        C["graph_bg"]          = _at_a(dark_bg or space_back, 0.85)
-        C["endpoint_fill"]     = _at_a(space_back, 1.0)
-        C["preset_preview_bg"] = _at_a(_darken(space_back, 0.70) or space_back, 0.80)
+    curve_selected = _pick("common.anim.keyframe_selected")
 
-    if reg_outline:
-        C["panel_border"]          = _at_a(reg_outline, min(1.0, reg_outline[3] + 0.1))
-        C["preset_tile_border"]    = _at_a(reg_outline, 0.95)
-        C["preset_preview_border"] = _at_a(reg_outline, 0.80)
-        C["endpoint_outline"]      = _at_a(reg_outline, 0.95)
-        C["button_default_border"] = _at_a(reg_outline, 0.75)
-        C["button_preset_border"]  = _at_a(reg_outline, 0.80)
-        C["handle_outline"]        = (1.0, 1.0, 1.0, 1.0)
+    palette = {
+        "white": _alpha(reg_text_sel, 1.0),
+        "text_default": _alpha(reg_text, 1.0),
+        "text_pressed": _alpha(reg_text_sel, 0.9),
+        "preset_tile_bg": _alpha(reg_inner, 0.92),
+        "preset_tile_border": _alpha(reg_outline, 0.95),
+        "preset_preview_bg": _alpha(tab_inner, 0.8),
+        "preset_preview_border": _alpha(tab_outline, 0.8),
+        "curve_orange": _alpha(curve_selected, 1.0),
+        "preset_title_text": _alpha(reg_text, 0.95),
+        "button_apply_base": _alpha(reg_inner_sel, 0.95),
+        "button_apply_border": _alpha(reg_outline_sel, 0.98),
+        "button_auto_on_base": _alpha(reg_inner_sel, 0.95),
+        "button_auto_on_border": _alpha(reg_outline_sel, 0.98),
+        "button_auto_off_base": _alpha(reg_inner, 0.92),
+        "button_auto_off_border": _alpha(reg_outline, 0.95),
+        "button_preset_base": _alpha(tab_inner or reg_inner, 0.9),
+        "button_preset_border": _alpha(tab_outline or reg_outline, 0.95),
+        "button_default_base": _alpha(reg_inner, 0.88),
+        "button_default_border": _alpha(reg_outline, 0.95),
+        "graph_bg": _alpha(menubg_inner, 0.85),
+        "tab_active_bg": _alpha(tab_inner_sel, 0.95),
+        "tab_inactive_bg": _alpha(tab_inner, 0.88),
+        "tab_active_text": _alpha(tab_text_sel, 1.0),
+        "tab_inactive_text": _alpha(tab_text, 1.0),
+        "tab_inactive_hover_text": _alpha(tab_text_sel, 1.0),
+        "tab_active_outline": _alpha(tab_outline, 0.9),
+        "grid_axis": _alpha(menu_outline, 1.0),
+        "grid_boundary": _alpha(menu_outline, 0.9),
+        "grid_regular": _alpha(menu_outline, 0.65),
+        "elastic_curve": _alpha(curve_selected, 1.0),
+        "endpoint_fill": _alpha(reg_inner, 1.0),
+        "endpoint_outline": _alpha(reg_text, 0.6),
+        "elastic_amp_guide": _alpha(state_overridden, 0.18),
+        "elastic_per_guide": _alpha(state_changed, 0.18),
+        "handle_amp_fill": _alpha(state_overridden, 1.0),
+        "handle_per_fill": _alpha(state_changed, 1.0),
+        "handle_outline": _alpha(reg_text, 1.0),
+        "elastic_amp_label": _alpha(state_overridden, 0.9),
+        "elastic_per_label": _alpha(state_changed, 0.9),
+        "handle_line": _alpha(reg_text, 0.85),
+        "bezier_h1_label": _alpha(state_overridden, 0.75),
+        "bezier_h2_label": _alpha(state_changed, 0.75),
+        "panel_bg": _alpha(menu_inner, 1.0),
+        "panel_border": _alpha(menu_inner, 1.0),
+        "panel_border_hover": _alpha(menu_outline, 1.0),
+        "info_text": _alpha(reg_text, 1.0),
+        "info_footer_text": _alpha(reg_text, 0.85),
+        "info_empty_text": _alpha(reg_text, 0.8),
+    }
 
-    if frame_cur:
-        C["panel_border_hover"] = _at_a(frame_cur, 1.0)
-        C["curve_orange"]       = _at_a(frame_cur, 1.0)
-        C["handle_per_fill"]    = _at_a(frame_cur, 1.0)
-        C["tab_active_outline"] = _at_a(frame_cur, 0.80)
-        C["bezier_h2_label"]    = _at_a(frame_cur, 0.75)
-
-    if scrub:
-        C["elastic_curve"]   = _at_a(scrub, 1.0)
-        C["handle_amp_fill"] = _at_a(scrub, 1.0)
-        C["elastic_amp_label"] = _at_a(scrub, 0.90)
-        C["bezier_h1_label"]   = _at_a(scrub, 0.75)
-
-    if grid_c:
-        C["grid_axis"]     = _at_a(grid_c, 1.0)
-        C["grid_boundary"] = _at_a(grid_c, 0.85)
-        C["grid_regular"]  = _at_a(grid_c, 0.55)
-
-    if reg_inner:
-        C["button_default_base"] = _at_a(reg_inner, 0.88)
-        C["button_preset_base"]  = _at_a(reg_inner, 0.90)
-        C["preset_tile_bg"]      = _at_a(reg_inner, 0.92)
-        darker = _darken(reg_inner, 0.78) or reg_inner
-        C["button_auto_off_base"] = _at_a(darker, 0.92)
-
-    if key_inner:
-        C["button_apply_base"]   = _at_a(key_inner, 0.95)
-        C["button_auto_on_base"] = _at_a(_darken(key_inner, 0.70) or key_inner, 0.95)
-
-    if reg_text:
-        C["text_default"]      = _at_a(reg_text, 1.0)
-        C["text_pressed"]      = _at_a(reg_text, 0.85)
-        C["white"]             = _at_a(reg_text, 1.0)
-        C["info_text"]         = _at_a(reg_text, 1.0)
-        C["info_footer_text"]  = _at_a(reg_text, 0.85)
-        C["info_empty_text"]   = _at_a(reg_text, 0.80)
-        C["preset_title_text"] = _at_a(reg_text, 0.92)
-
-    if tab_inner:
-        C["tab_inactive_bg"] = _at_a(tab_inner, 0.88)
-    if tab_inner_s:
-        C["tab_active_bg"]   = _at_a(tab_inner_s, 0.95)
-    if tab_text:
-        C["tab_inactive_text"]       = _at_a(tab_text, 1.0)
-        C["tab_inactive_hover_text"] = (
-            min(1.0, tab_text[0] + 0.15),
-            min(1.0, tab_text[1] + 0.15),
-            min(1.0, tab_text[2] + 0.15),
-            1.0,
-        )
-    if tab_text_s:
-        C["tab_active_text"] = _at_a(tab_text_s, 1.0)
-
-    return C
+    for key in TLFC_COLORS.keys():
+        val = palette.get(key)
+        if val is not None:
+            colors[key] = val
+    return colors
 
 
 def _elastic_ease_out_normalized(t, amplitude=1.0, period=0.3):
@@ -1243,10 +1205,9 @@ def draw_editor_sidebar():
         # Keep left edge invisible when panel spans entire editor width.
         if not full_width_panel:
             _draw_aa_line_strip([(x0, y0), (x0, y1)], border, width=2.0)
-        _draw_aa_line_strip([(x1, y0), (x1, y1)], border, width=2.0)
     else:
         if full_width_panel:
-            _draw_aa_line_strip([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], border, width=2.0)
+            _draw_aa_line_strip([(x0, y0), (x0, y1)], border, width=2.0)
         else:
             _draw_aa_line_strip([(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)], border, width=2.0)
     title_top_pad = max(6, int(8 * size_scale))

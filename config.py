@@ -65,7 +65,7 @@ TLFC_PROPERTY_RANGES = {
 	"tlfc_h1y": (None, None),
 	"tlfc_h2x": (None, 1.0),
 	"tlfc_h2y": (None, None),
-	"tlfc_elastic_amplitude": (0.0, 1.0),
+	"tlfc_elastic_amplitude": (0.0, 2.0),
 	"tlfc_elastic_period": (0.05, 1.0),
 	"tlfc_grid_subdiv": (1, 64),
 	"tlfc_snap_threshold": (0.0, 1.0),
