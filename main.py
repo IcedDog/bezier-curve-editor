@@ -619,6 +619,7 @@ def _theme_colors():
     menubg_inner = _pick("user_interface.wcol_menu_back.inner")    
     menu_inner = _pick("user_interface.wcol_menu.inner")
     menu_outline = _pick("user_interface.wcol_menu.outline")
+    menu_text = _pick("user_interface.wcol_menu.text")
 
     curve_selected = _pick("common.anim.keyframe_selected")
 
@@ -668,9 +669,9 @@ def _theme_colors():
         "panel_bg": _alpha(menu_inner, 1.0),
         "panel_border": _alpha(menu_inner, 1.0),
         "panel_border_hover": _alpha(menu_outline, 1.0),
-        "info_text": _alpha(reg_text, 1.0),
-        "info_footer_text": _alpha(reg_text, 0.85),
-        "info_empty_text": _alpha(reg_text, 0.8),
+        "info_text": _alpha(menu_text, 1.0),
+        "info_footer_text": _alpha(menu_text, 0.85),
+        "info_empty_text": _alpha(menu_text, 0.8),
     }
 
     for key in TLFC_COLORS.keys():
