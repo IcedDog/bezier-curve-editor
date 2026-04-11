@@ -73,6 +73,7 @@ def _reset_ui_state(wm, *, clear_drag=True, clear_hover=True, clear_buttons=True
     if clear_hover:
         wm.tlfc_hover_sidebar = False
         wm.tlfc_hover_sidebar_edge = False
+        wm.tlfc_hover_graph_sep = False
     if clear_drag:
         wm.tlfc_dragging_sidebar = False
     if clear_buttons:
@@ -153,6 +154,23 @@ def _area_key(area):
     return int(area.as_pointer()) if area else 0
 
 
+def _find_area_by_ptr(area_ptr):
+    if not area_ptr:
+        return None
+    try:
+        for w in bpy.data.window_managers:
+            for win in w.windows:
+                scr = win.screen
+                if not scr:
+                    continue
+                for area in scr.areas:
+                    if _area_key(area) == int(area_ptr):
+                        return area
+    except Exception:
+        return None
+    return None
+
+
 def _is_editor_enabled(area):
     key = _area_key(area)
     if key == 0:
@@ -189,6 +207,37 @@ def _any_timeline_editor_enabled():
     except Exception:
         pass
     return False
+
+
+def _prune_invalid_enabled_areas():
+    """Remove enabled-area entries that no longer map to a supported editor space."""
+    data = _enabled_areas_map()
+    if not data:
+        return False
+
+    valid_keys = set()
+    try:
+        for w in bpy.data.window_managers:
+            for win in w.windows:
+                scr = win.screen
+                if not scr:
+                    continue
+                for area in scr.areas:
+                    if area.type not in {'DOPESHEET_EDITOR', 'INFO', 'GRAPH_EDITOR'}:
+                        continue
+                    sp = area.spaces.active
+                    if not _supports_editor_space(sp):
+                        continue
+                    valid_keys.add(_area_key(area))
+    except Exception:
+        return False
+
+    changed = False
+    for key in list(data.keys()):
+        if key not in valid_keys:
+            data.pop(key, None)
+            changed = True
+    return changed
 
 
 def _truncate_text_to_width(text, max_width, size=10):
@@ -1247,7 +1296,6 @@ def draw_editor_sidebar():
     _sep_hit = int(TLFC_UI_NUMBERS.get("graph_sep_hit_px", 6))
     _sep_hover = getattr(wm, 'tlfc_hover_graph_sep', False)
     _sep_col = C["panel_border_hover"] if _sep_hover else C["panel_border"]
-    _draw_aa_line_strip([(sx0, sy0), (sx1, sy0)], _sep_col, width=3.0 if _sep_hover else 1.5)
 
     # Draw tab buttons (Bezier | Elastic) and collect rects for hit-testing
     _pending_tab_buttons = []
@@ -1398,6 +1446,8 @@ def draw_editor_sidebar():
         _gp = _clip_line_to_rect(_g_per_l, _g_per_r, sx0, sy0, sx1, sy1)
         if _gp:
             _draw_aa_line_strip(_gp, C["elastic_per_guide"], width=4.0)
+        
+        _draw_aa_line_strip([(sx0, sy0), (sx1, sy0)], _sep_col, width=3.0 if _sep_hover else 1.5)
 
         # --- Handle circles (drawn at clamped positions, always inside view) ---
         hover_handle = getattr(wm, 'tlfc_hover_handle', '')
@@ -1459,6 +1509,8 @@ def draw_editor_sidebar():
             _cs = _clip_line_to_rect(curve_pts[_i], curve_pts[_i + 1], sx0, sy0, sx1, sy1)
             if _cs:
                 _draw_aa_line_strip(_cs, C["curve_orange"], width=4.0)
+        
+        _draw_aa_line_strip([(sx0, sy0), (sx1, sy0)], _sep_col, width=3.0 if _sep_hover else 1.5)
 
         # --- Start / end point markers (only when anchor is inside view) ---
         _ep_r = 4.0 * size_scale
@@ -1489,7 +1541,7 @@ def draw_editor_sidebar():
         _h2x, _h2y = _label_pos(p2s[0], p2s[1], _h2_w, _lbl_h, -_h2_w - _lbl_off, _lbl_off)
         _draw_text(_h1x, _h1y, _h1_text, size=_lbl_sz, color=C["bezier_h1_label"])
         _draw_text(_h2x, _h2y, _h2_text, size=_lbl_sz, color=C["bezier_h2_label"])
-
+    
     area_ptr = ctx.area.as_pointer() if ctx.area else 0
     ui_map = ns.get(EDITOR_UI_KEY)
     if not isinstance(ui_map, dict):
@@ -1780,6 +1832,11 @@ def redraw_timer():
     ns[REDRAW_LAST_TICK_KEY] = now
 
     wm = bpy.context.window_manager
+    changed_enabled = _prune_invalid_enabled_areas()
+    if changed_enabled and not _any_timeline_editor_enabled() and wm is not None:
+        wm.tlfc_mouse_editing = False
+        _reset_ui_state(wm)
+
     if wm is None or not _any_timeline_editor_enabled():
         _disable_runtime_handlers(clear_ui=True)
         ns[REDRAW_LAST_INTERVAL_KEY] = 0.25
@@ -1873,6 +1930,7 @@ class TLFC_PT_editor_header_dropdown(bpy.types.Panel):
 
 
 def draw_tlfc_timeline_header(self, context):
+    _prune_invalid_enabled_areas()
     sp = context.space_data
     if not sp or sp.type != 'DOPESHEET_EDITOR':
         return
@@ -1887,6 +1945,7 @@ def draw_tlfc_timeline_header(self, context):
 
 
 def draw_tlfc_info_header(self, context):
+    _prune_invalid_enabled_areas()
     sp = context.space_data
     if not sp or sp.type != 'INFO':
         return
@@ -1962,6 +2021,7 @@ class TLFC_PT_graph_editor_header_dropdown(bpy.types.Panel):
 
 
 def draw_tlfc_graph_header(self, context):
+    _prune_invalid_enabled_areas()
     sp = context.space_data
     if not sp or sp.type != 'GRAPH_EDITOR':
         return
@@ -2105,6 +2165,26 @@ class TLFC_OT_mouse_edit_curve(bpy.types.Operator):
             _reset_ui_state(wm)
             self._clear_modal_cursor(context)
             return {'PASS_THROUGH'}
+
+        ui_area_ptr = int(ui.get("area", area_ptr))
+        ui_area = _find_area_by_ptr(ui_area_ptr)
+
+        # If this area changed editor type while overlay was open, close it cleanly.
+        cur_space = ui_area.spaces.active if ui_area and ui_area.spaces else None
+        cur_space_type = getattr(cur_space, "type", "") if cur_space else ""
+        if (cur_space_type != ui.get("space_type", cur_space_type)) or (not _supports_editor_space(cur_space)):
+            if ui_area is not None:
+                _set_editor_enabled(ui_area, False)
+            else:
+                _enabled_areas_map().pop(ui_area_ptr, None)
+            wm.tlfc_mouse_editing = False
+            self._drag = None
+            _reset_ui_state(wm)
+            if not _any_timeline_editor_enabled():
+                _disable_runtime_handlers(clear_ui=True)
+            self._clear_modal_cursor(context)
+            _tag_redraw_dopesheet()
+            return {'CANCELLED'}
 
         block_until = float(ns.get(SWITCH_BLOCK_UNTIL_KEY, 0.0))
         if time.perf_counter() < block_until:
