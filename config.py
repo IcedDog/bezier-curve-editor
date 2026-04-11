@@ -1,5 +1,6 @@
 ADDON_KEY = "TLFC_EDITOR_HANDLE"
 INFO_ADDON_KEY = "TLFC_INFO_EDITOR_HANDLE"
+GRAPH_ADDON_KEY = "TLFC_GRAPH_EDITOR_HANDLE"
 EDITOR_UI_KEY = "TLFC_EDITOR_UI"
 ENABLED_AREAS_KEY = "TLFC_ENABLED_AREAS"
 PRESET_FILE = "curve_presets.txt"
@@ -17,6 +18,7 @@ TLFC_PROPERTY_DEFAULTS = {
 	"tlfc_redraw_load_threshold": 1.65,
 	"tlfc_show_timeline_header_button": True,
 	"tlfc_show_info_header_button": True,
+	"tlfc_show_graph_header_button": True,
 	"tlfc_show_display_settings": False,
 	"tlfc_sidebar_width": 34.0,
 	"tlfc_outer_pad": 0,
@@ -48,6 +50,8 @@ TLFC_PROPERTY_DEFAULTS = {
 	"tlfc_hover_button": "",
 	"tlfc_pressed_button": "",
 	"tlfc_hover_handle": "",
+	"tlfc_graph_height_ratio": 0.75,
+	"tlfc_hover_graph_sep": False,
 }
 
 TLFC_PROPERTY_RANGES = {
@@ -66,6 +70,7 @@ TLFC_PROPERTY_RANGES = {
 	"tlfc_grid_subdiv": (1, 64),
 	"tlfc_snap_threshold": (0.0, 1.0),
 	"tlfc_view_zoom": (0.2, 6.0),
+	"tlfc_graph_height_ratio": (0.15, 0.92),
 }
 
 TLFC_UI_NUMBERS = {
@@ -76,6 +81,7 @@ TLFC_UI_NUMBERS = {
 	"pan_zoom_floor": 0.1,
 	"elastic_handle_x": 0.10,
 	"elastic_handle_y": 0.25,
+	"graph_sep_hit_px": 6,
 }
 
 TLFC_COLORS = {

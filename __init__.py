@@ -3,7 +3,7 @@ bl_info = {
     "author": "IcedDog",
     "version": (1, 0, 0),
     "blender": (4, 2, 0),
-    "location": "Dope Sheet > Sidebar",
+    "location": "Dope Sheet / Graph Editor > Sidebar",
     "description": "Bezier curve overlay editor for Timeline keyframe easing",
     "category": "Animation",
 }

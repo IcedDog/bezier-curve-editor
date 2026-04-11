@@ -11,6 +11,7 @@ from .translation import translations_dict
 from .config import (
     ADDON_KEY,
     INFO_ADDON_KEY,
+    GRAPH_ADDON_KEY,
     EDITOR_UI_KEY,
     ENABLED_AREAS_KEY,
     PRESET_FILE,
@@ -101,6 +102,13 @@ def _pref_float(name, default=0.0):
     return float(getattr(prefs, name, default))
 
 
+def _sync_graph_height_to_prefs(self, context):
+    """Update callback: persist graph height ratio to addon preferences."""
+    prefs = _addon_prefs()
+    if prefs is not None:
+        prefs.tlfc_graph_height_ratio = self.tlfc_graph_height_ratio
+
+
 def _set_editor_enabled_exclusive(area):
     key = _area_key(area)
     if key == 0:
@@ -120,7 +128,7 @@ def _tag_redraw_dopesheet():
                 if not scr:
                     continue
                 for area in scr.areas:
-                    if area.type in {'DOPESHEET_EDITOR', 'INFO'}:
+                    if area.type in {'DOPESHEET_EDITOR', 'INFO', 'GRAPH_EDITOR'}:
                         area.tag_redraw()
     except Exception:
         pass
@@ -129,9 +137,7 @@ def _tag_redraw_dopesheet():
 def _supports_editor_space(space):
     if not space:
         return False
-    if space.type == 'DOPESHEET_EDITOR':
-        return getattr(space, "mode", None) == 'TIMELINE'
-    return space.type == 'INFO'
+    return space.type in {'DOPESHEET_EDITOR', 'INFO', 'GRAPH_EDITOR'}
 
 
 def _enabled_areas_map():
@@ -173,7 +179,7 @@ def _any_timeline_editor_enabled():
                 if not scr:
                     continue
                 for area in scr.areas:
-                    if area.type not in {'DOPESHEET_EDITOR', 'INFO'}:
+                    if area.type not in {'DOPESHEET_EDITOR', 'INFO', 'GRAPH_EDITOR'}:
                         continue
                     sp = area.spaces.active
                     if not _supports_editor_space(sp):
@@ -332,34 +338,32 @@ def _delete_preset_index(idx):
     return _save_presets(presets)
 
 
-def _draw_preset_tile(x0, y0, x1, y1, preset, size_scale):
-    _draw_rect(x0, y0, x1, y1, TLFC_COLORS["preset_tile_bg"])
-    _draw_aa_line_strip([(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)], TLFC_COLORS["preset_tile_border"], width=2.0)
+def _draw_preset_tile(x0, y0, x1, y1, preset, size_scale, colors=None):
+    C = colors if colors is not None else TLFC_COLORS
+    _draw_rect(x0, y0, x1, y1, C["preset_tile_bg"])
+    _draw_aa_line_strip([(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)], C["preset_tile_border"], width=2.0)
     pad = max(4, int(5 * size_scale))
     ix0 = x0 + pad
     iy0 = y0 + pad + 10
     ix1 = x1 - pad
     iy1 = y1 - pad
-    _draw_rect(ix0, iy0, ix1, iy1, TLFC_COLORS["preset_preview_bg"])
-    _draw_aa_line_strip([(ix0, iy0), (ix1, iy0), (ix1, iy1), (ix0, iy1), (ix0, iy0)], TLFC_COLORS["preset_preview_border"], width=2.0)
+    _draw_rect(ix0, iy0, ix1, iy1, C["preset_preview_bg"])
+    _draw_aa_line_strip([(ix0, iy0), (ix1, iy0), (ix1, iy1), (ix0, iy1), (ix0, iy0)], C["preset_preview_border"], width=2.0)
 
     preset_type = preset.get("type", "BEZIER")
     pts = []
     preview_steps = 32
 
     if preset_type == "ELASTIC":
-        # Draw elastic curve preview
         amplitude = preset.get("amplitude", _prop_default("tlfc_elastic_amplitude"))
         period = preset.get("period", _prop_default("tlfc_elastic_period"))
         for i in range(preview_steps):
             t = i / (preview_steps - 1.0)
             bx = t
             by = _elastic_ease_out_normalized(t, amplitude, period)
-            # Clamp to preview box so overshoot doesn't bleed outside the tile
             by_clamped = max(0.0, min(1.0, by / 2.0))
             pts.append((ix0 + bx * (ix1 - ix0), iy0 + by_clamped * (iy1 - iy0)))
     else:
-        # Draw bezier curve preview
         h1x = max(0.0, float(preset.get("h1x", _prop_default("tlfc_h1x"))))
         h1y = float(preset.get("h1y", _prop_default("tlfc_h1y")))
         h2x = min(1.0, float(preset.get("h2x", _prop_default("tlfc_h2x"))))
@@ -373,8 +377,8 @@ def _draw_preset_tile(x0, y0, x1, y1, preset, size_scale):
             bx, by = _bezier_point(t, p0, p1, p2, p3)
             pts.append((ix0 + bx * (ix1 - ix0), iy0 + by * (iy1 - iy0)))
 
-    _draw_aa_line_strip(pts, TLFC_COLORS["curve_orange"], width=2.0)
-    _draw_text_centered(x0, y0, x1, y0 + 12, preset.get("name", "P"), size=max(8, int(9 * size_scale)), color=TLFC_COLORS["preset_title_text"], truncate=True, pad=4)
+    _draw_aa_line_strip(pts, C["curve_orange"], width=2.0)
+    _draw_text_centered(x0, y0, x1, y0 + 12, preset.get("name", "P"), size=max(8, int(9 * size_scale)), color=C["preset_title_text"], truncate=True, pad=4)
 
 # ---------- Drawing helpers ----------
 def _draw_rect(x0, y0, x1, y1, color):
@@ -461,28 +465,29 @@ def _adjust_rgba(color, delta):
     )
 
 
-def _button_state_colors(kind, state):
+def _button_state_colors(kind, state, colors=None):
+    C = colors if colors is not None else TLFC_COLORS
     if kind == "apply":
-        base = TLFC_COLORS["button_apply_base"]
-        border = TLFC_COLORS["button_apply_border"]
+        base = C["button_apply_base"]
+        border = C["button_apply_border"]
     elif kind == "auto_on":
-        base = TLFC_COLORS["button_auto_on_base"]
-        border = TLFC_COLORS["button_auto_on_border"]
+        base = C["button_auto_on_base"]
+        border = C["button_auto_on_border"]
     elif kind == "auto_off":
-        base = TLFC_COLORS["button_auto_off_base"]
-        border = TLFC_COLORS["button_auto_off_border"]
+        base = C["button_auto_off_base"]
+        border = C["button_auto_off_border"]
     elif kind == "preset":
-        base = TLFC_COLORS["button_preset_base"]
-        border = TLFC_COLORS["button_preset_border"]
+        base = C["button_preset_base"]
+        border = C["button_preset_border"]
     else:
-        base = TLFC_COLORS["button_default_base"]
-        border = TLFC_COLORS["button_default_border"]
+        base = C["button_default_base"]
+        border = C["button_default_border"]
 
     if state == "hover":
-        return _adjust_rgba(base, 0.08), _adjust_rgba(border, 0.07), TLFC_COLORS["white"]
+        return _adjust_rgba(base, 0.08), _adjust_rgba(border, 0.07), C["white"]
     if state == "pressed":
-        return _adjust_rgba(base, -0.08), _adjust_rgba(border, -0.05), TLFC_COLORS["text_pressed"]
-    return base, border, TLFC_COLORS["text_default"]
+        return _adjust_rgba(base, -0.08), _adjust_rgba(border, -0.05), C["text_pressed"]
+    return base, border, C["text_default"]
 
 
 def _draw_text_clipped_left(x, y, max_width, text, size=10, color=TLFC_COLORS["white"], pad=0):
@@ -502,6 +507,167 @@ def _button_token(op, kwargs):
     if op == "set_mode":
         return f"set_mode:{kwargs.get('mode', 'BEZIER')}"
     return op
+
+
+def _theme_colors():
+    """Read colors from the active Blender theme, returning a dict with the same
+    keys as TLFC_COLORS. Falls back to TLFC_COLORS values for any slot that
+    cannot be read from the theme."""
+    C = dict(TLFC_COLORS)  # start with fallback values
+    
+    try:
+        theme = bpy.context.preferences.themes[0]
+        ui = theme.user_interface
+        ds = theme.dopesheet_editor
+    except Exception as e:
+        print(f"[TLFC] Failed to access theme: {e}")
+        return C
+
+    def _c4(src, alpha=1.0):
+        try:
+            r, g, b = float(src[0]), float(src[1]), float(src[2])
+            a = float(src[3]) if len(src) > 3 else alpha
+            return (r, g, b, a)
+        except Exception:
+            return None
+
+    def _at_a(c, a):
+        return (c[0], c[1], c[2], a) if c else None
+
+    def _darken(c, f):
+        return (c[0] * f, c[1] * f, c[2] * f, c[3]) if c else None
+
+    try:
+        space_back  = _c4(ds.space.back, 1.0)
+    except Exception:
+        space_back = None
+        
+    try:
+        grid_c      = _c4(ds.grid, 1.0)
+    except Exception:
+        grid_c = None
+        
+    try:
+        frame_cur   = _c4(ds.frame_current, 1.0)
+    except Exception:
+        frame_cur = None
+        
+    try:
+        scrub = _c4(ds.time_scrub_line, 1.0)
+    except Exception:
+        scrub = frame_cur
+        
+    try:
+        reg_inner   = _c4(ui.wcol_regular.inner, 0.88)
+    except Exception:
+        reg_inner = None
+        
+    try:
+        reg_text    = _c4(ui.wcol_regular.text, 1.0)
+    except Exception:
+        reg_text = None
+        
+    try:
+        reg_outline = _c4(ui.wcol_regular.outline, 0.95)
+    except Exception:
+        reg_outline = None
+        
+    try:
+        tab_inner   = _c4(ui.wcol_tab.inner, 0.88)
+    except Exception:
+        tab_inner = None
+        
+    try:
+        tab_inner_s = _c4(ui.wcol_tab.inner_sel, 0.95)
+    except Exception:
+        tab_inner_s = None
+        
+    try:
+        tab_text    = _c4(ui.wcol_tab.text, 1.0)
+    except Exception:
+        tab_text = None
+        
+    try:
+        tab_text_s  = _c4(ui.wcol_tab.text_sel, 1.0)
+    except Exception:
+        tab_text_s = None
+        
+    try:
+        key_inner = _c4(ui.wcol_state.inner_key, 0.95)
+    except Exception:
+        key_inner = None
+
+    if space_back:
+        C["panel_bg"]          = _at_a(space_back, 1.0)
+        dark_bg                = _darken(space_back, 0.55)
+        C["graph_bg"]          = _at_a(dark_bg or space_back, 0.85)
+        C["endpoint_fill"]     = _at_a(space_back, 1.0)
+        C["preset_preview_bg"] = _at_a(_darken(space_back, 0.70) or space_back, 0.80)
+
+    if reg_outline:
+        C["panel_border"]          = _at_a(reg_outline, min(1.0, reg_outline[3] + 0.1))
+        C["preset_tile_border"]    = _at_a(reg_outline, 0.95)
+        C["preset_preview_border"] = _at_a(reg_outline, 0.80)
+        C["endpoint_outline"]      = _at_a(reg_outline, 0.95)
+        C["button_default_border"] = _at_a(reg_outline, 0.75)
+        C["button_preset_border"]  = _at_a(reg_outline, 0.80)
+        C["handle_outline"]        = (1.0, 1.0, 1.0, 1.0)
+
+    if frame_cur:
+        C["panel_border_hover"] = _at_a(frame_cur, 1.0)
+        C["curve_orange"]       = _at_a(frame_cur, 1.0)
+        C["handle_per_fill"]    = _at_a(frame_cur, 1.0)
+        C["tab_active_outline"] = _at_a(frame_cur, 0.80)
+        C["bezier_h2_label"]    = _at_a(frame_cur, 0.75)
+
+    if scrub:
+        C["elastic_curve"]   = _at_a(scrub, 1.0)
+        C["handle_amp_fill"] = _at_a(scrub, 1.0)
+        C["elastic_amp_label"] = _at_a(scrub, 0.90)
+        C["bezier_h1_label"]   = _at_a(scrub, 0.75)
+
+    if grid_c:
+        C["grid_axis"]     = _at_a(grid_c, 1.0)
+        C["grid_boundary"] = _at_a(grid_c, 0.85)
+        C["grid_regular"]  = _at_a(grid_c, 0.55)
+
+    if reg_inner:
+        C["button_default_base"] = _at_a(reg_inner, 0.88)
+        C["button_preset_base"]  = _at_a(reg_inner, 0.90)
+        C["preset_tile_bg"]      = _at_a(reg_inner, 0.92)
+        darker = _darken(reg_inner, 0.78) or reg_inner
+        C["button_auto_off_base"] = _at_a(darker, 0.92)
+
+    if key_inner:
+        C["button_apply_base"]   = _at_a(key_inner, 0.95)
+        C["button_auto_on_base"] = _at_a(_darken(key_inner, 0.70) or key_inner, 0.95)
+
+    if reg_text:
+        C["text_default"]      = _at_a(reg_text, 1.0)
+        C["text_pressed"]      = _at_a(reg_text, 0.85)
+        C["white"]             = _at_a(reg_text, 1.0)
+        C["info_text"]         = _at_a(reg_text, 1.0)
+        C["info_footer_text"]  = _at_a(reg_text, 0.85)
+        C["info_empty_text"]   = _at_a(reg_text, 0.80)
+        C["preset_title_text"] = _at_a(reg_text, 0.92)
+
+    if tab_inner:
+        C["tab_inactive_bg"] = _at_a(tab_inner, 0.88)
+    if tab_inner_s:
+        C["tab_active_bg"]   = _at_a(tab_inner_s, 0.95)
+    if tab_text:
+        C["tab_inactive_text"]       = _at_a(tab_text, 1.0)
+        C["tab_inactive_hover_text"] = (
+            min(1.0, tab_text[0] + 0.15),
+            min(1.0, tab_text[1] + 0.15),
+            min(1.0, tab_text[2] + 0.15),
+            1.0,
+        )
+    if tab_text_s:
+        C["tab_active_text"] = _at_a(tab_text_s, 1.0)
+
+    return C
+
 
 def _elastic_ease_out_normalized(t, amplitude=1.0, period=0.3):
     if t <= 0.0:
@@ -1015,11 +1181,13 @@ def draw_editor_sidebar():
         x0 = max(0, x1 - sidebar_w)
     y0 = pad_outer
     y1 = region.height - pad_outer
+    # Resolve theme colors once per draw call (auto-follows active Blender theme).
+    C = _theme_colors()
     # Panel background and border
-    bg = (TLFC_COLORS["panel_bg"][0], TLFC_COLORS["panel_bg"][1], TLFC_COLORS["panel_bg"][2], alpha)
-    border = (TLFC_COLORS["panel_border"][0], TLFC_COLORS["panel_border"][1], TLFC_COLORS["panel_border"][2], min(1.0, alpha + 0.2))
+    bg = (C["panel_bg"][0], C["panel_bg"][1], C["panel_bg"][2], alpha)
+    border = (C["panel_border"][0], C["panel_border"][1], C["panel_border"][2], min(1.0, alpha + 0.2))
     if getattr(wm, "tlfc_hover_sidebar_edge", False) or getattr(wm, "tlfc_dragging_sidebar", False):
-        border = (TLFC_COLORS["panel_border_hover"][0], TLFC_COLORS["panel_border_hover"][1], TLFC_COLORS["panel_border_hover"][2], min(1.0, alpha + 0.28))
+        border = (C["panel_border_hover"][0], C["panel_border_hover"][1], C["panel_border_hover"][2], min(1.0, alpha + 0.28))
     _draw_rect(x0, y0, x1, y1, bg)
     full_width_panel = (x0 <= 0 and x1 >= region.width)
     if pad_outer == 0:
@@ -1047,19 +1215,39 @@ def draw_editor_sidebar():
     tab_y1 = y1 - title_top_pad
     tab_y0 = tab_y1 - tab_h_val
 
-    # Square easing editor (0..1 mapped space)
+    # Easing editor graph — height is ratio-driven for proportional scaling.
+    # The curve widget is the most important UI element: guarantee a minimum
+    # size so that it is never "crushed" by surrounding buttons.
     pad = 12
     sx0 = x0 + pad
     sx1_limit = x1 - pad
     sy1 = tab_y0 - tab_gap_below
     extra_tab_space = tab_h_val + tab_gap_below
-    max_h = max(80, (y1 - y0) - 190 - extra_tab_space)
-    sq = min(max_h, sx1_limit - sx0)
-    sx1 = sx0 + sq
-    sy0 = sy1 - sq
+    available_h = max(80, (y1 - y0) - extra_tab_space - 10)
+    # Read graph ratio from addon preferences (persistent) with WM fallback.
+    graph_ratio = _pref_float("tlfc_graph_height_ratio", getattr(wm, 'tlfc_graph_height_ratio', _prop_default("tlfc_graph_height_ratio")))
+    # Guarantee at least 80px for the curve widget so it stays functional
+    # even when the window is very short vertically.
+    graph_h = max(80, int(available_h * graph_ratio))
+    graph_w = min(graph_h, sx1_limit - sx0)
+    # Allow the graph to be taller than wide (rectangular) so it
+    # fills available vertical space instead of wasting it.
+    graph_actual_h = graph_h
+    # Clamp so the graph never extends below the panel's bottom reserve
+    # (apply button height + padding).
+    min_bottom = y0 + 50
+    if sy1 - graph_actual_h < min_bottom:
+        graph_actual_h = max(40, int(sy1 - min_bottom))
+    sx1 = sx0 + graph_w
+    sy0 = sy1 - graph_actual_h
 
-    _draw_rect(sx0, sy0, sx1, sy1, TLFC_COLORS["graph_bg"])
-    _draw_aa_line_strip([(sx0, sy0), (sx1, sy0), (sx1, sy1), (sx0, sy1), (sx0, sy0)], TLFC_COLORS["preset_preview_border"], width=1.0)
+    _draw_rect(sx0, sy0, sx1, sy1, C["graph_bg"])
+    _draw_aa_line_strip([(sx0, sy0), (sx1, sy0), (sx1, sy1), (sx0, sy1), (sx0, sy0)], C["preset_preview_border"], width=1.0)
+    # Separator bar below the graph for manual resize dragging.
+    _sep_hit = int(TLFC_UI_NUMBERS.get("graph_sep_hit_px", 6))
+    _sep_hover = getattr(wm, 'tlfc_hover_graph_sep', False)
+    _sep_col = C["panel_border_hover"] if _sep_hover else C["panel_border"]
+    _draw_aa_line_strip([(sx0, sy0), (sx1, sy0)], _sep_col, width=3.0 if _sep_hover else 1.5)
 
     # Draw tab buttons (Bezier | Elastic) and collect rects for hit-testing
     _pending_tab_buttons = []
@@ -1076,20 +1264,20 @@ def draw_editor_sidebar():
         _token = _button_token("set_mode", {"mode": _tmode})
         _tstate = "pressed" if pressed_token == _token else ("hover" if hover_token == _token else "normal")
         if _is_active:
-            _tab_bg = TLFC_COLORS["tab_active_bg"]
-            _tab_tc = TLFC_COLORS["tab_active_text"]
+            _tab_bg = C["tab_active_bg"]
+            _tab_tc = C["tab_active_text"]
         else:
-            _tab_bg = TLFC_COLORS["tab_inactive_bg"]
-            _tab_tc = TLFC_COLORS["tab_inactive_text"]
+            _tab_bg = C["tab_inactive_bg"]
+            _tab_tc = C["tab_inactive_text"]
         if _tstate == "hover":
             _tab_bg = _adjust_rgba(_tab_bg, 0.08)
             if not _is_active:
-                _tab_tc = TLFC_COLORS["tab_inactive_hover_text"]
+                _tab_tc = C["tab_inactive_hover_text"]
         elif _tstate == "pressed":
             _tab_bg = _adjust_rgba(_tab_bg, -0.06)
         _draw_rect(_tx0, tab_y0, _tx1, tab_y1, _tab_bg)
         if _is_active:
-            _draw_aa_line_strip([(_tx0, tab_y0), (_tx1, tab_y0), (_tx1, tab_y1), (_tx0, tab_y1), (_tx0, tab_y0)], TLFC_COLORS["tab_active_outline"], width=1.0)
+            _draw_aa_line_strip([(_tx0, tab_y0), (_tx1, tab_y0), (_tx1, tab_y1), (_tx0, tab_y1), (_tx0, tab_y0)], C["tab_active_outline"], width=1.0)
         _draw_text_centered(_tx0, tab_y0, _tx1, tab_y1, _t(wm, _tkey, _tdefault), size=_tab_btn_font, color=_tab_tc, truncate=True, pad=4)
         _pending_tab_buttons.append({
             "rect_local": (_tx0, tab_y0, _tx1, tab_y1),
@@ -1130,16 +1318,13 @@ def draw_editor_sidebar():
         is_boundary = (abs(g) < 1e-6 or abs(g - 1.0) < 1e-6)  # g = 0 or g = 1
 
         if is_x_axis:
-            # X=0 and Y=0 axes - bright highlight
-            col = TLFC_COLORS["grid_axis"]
+            col = C["grid_axis"]
             width = axis_line_width
         elif is_boundary:
-            # Boundary lines at 0 and 1
-            col = TLFC_COLORS["grid_boundary"]
+            col = C["grid_boundary"]
             width = grid_line_width
         else:
-            # Regular grid lines
-            col = TLFC_COLORS["grid_regular"]
+            col = C["grid_regular"]
             width = grid_line_width * 0.8
 
         # Draw vertical line (clipped)
@@ -1182,7 +1367,7 @@ def draw_editor_sidebar():
         for _i in range(len(_el_pts) - 1):
             _seg = _clip_line_to_rect(_el_pts[_i], _el_pts[_i + 1], sx0, sy0, sx1, sy1)
             if _seg:
-                _draw_aa_line_strip(_seg, TLFC_COLORS["elastic_curve"], width=4.0)
+                _draw_aa_line_strip(_seg, C["elastic_curve"], width=4.0)
 
         # Handle positions in normalized editor space mapped from configured ranges.
         _amp_norm = _prop_to_unit("tlfc_elastic_amplitude", _el_amp)
@@ -1198,21 +1383,21 @@ def draw_editor_sidebar():
         _p_end   = _editor_to_screen(1.0, 0.5, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
         _ep_r = 4.0 * size_scale
         if sx0 <= _p_start[0] <= sx1 and sy0 <= _p_start[1] <= sy1:
-            _draw_aa_circle(_p_start[0], _p_start[1], _ep_r, TLFC_COLORS["endpoint_fill"], TLFC_COLORS["endpoint_outline"])
+            _draw_aa_circle(_p_start[0], _p_start[1], _ep_r, C["endpoint_fill"], C["endpoint_outline"])
         if sx0 <= _p_end[0] <= sx1 and sy0 <= _p_end[1] <= sy1:
-            _draw_aa_circle(_p_end[0], _p_end[1], _ep_r, TLFC_COLORS["endpoint_fill"], TLFC_COLORS["endpoint_outline"])
+            _draw_aa_circle(_p_end[0], _p_end[1], _ep_r, C["endpoint_fill"], C["endpoint_outline"])
 
         # --- Axis guide lines (clipped to view) ---
         _g_amp_bot = _editor_to_screen(TLFC_UI_NUMBERS["elastic_handle_x"], 0.0, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
         _g_amp_top = _editor_to_screen(TLFC_UI_NUMBERS["elastic_handle_x"], 1.0, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
         _gc = _clip_line_to_rect(_g_amp_bot, _g_amp_top, sx0, sy0, sx1, sy1)
         if _gc:
-            _draw_aa_line_strip(_gc, TLFC_COLORS["elastic_amp_guide"], width=4.0)
+            _draw_aa_line_strip(_gc, C["elastic_amp_guide"], width=4.0)
         _g_per_l = _editor_to_screen(0.0, TLFC_UI_NUMBERS["elastic_handle_y"], sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
         _g_per_r = _editor_to_screen(1.0, TLFC_UI_NUMBERS["elastic_handle_y"], sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
         _gp = _clip_line_to_rect(_g_per_l, _g_per_r, sx0, sy0, sx1, sy1)
         if _gp:
-            _draw_aa_line_strip(_gp, TLFC_COLORS["elastic_per_guide"], width=4.0)
+            _draw_aa_line_strip(_gp, C["elastic_per_guide"], width=4.0)
 
         # --- Handle circles (drawn at clamped positions, always inside view) ---
         hover_handle = getattr(wm, 'tlfc_hover_handle', '')
@@ -1234,8 +1419,8 @@ def draw_editor_sidebar():
         _p_w = blf.dimensions(0, _p_text)[0]
         _ax, _ay = _label_pos(p1s[0], p1s[1], _a_w, _lbl_h, _lbl_off, -4)
         _px, _py = _label_pos(p2s[0], p2s[1], _p_w, _lbl_h, -4, _lbl_off)
-        _draw_text(_ax, _ay, _a_text, size=_lbl_sz, color=TLFC_COLORS["elastic_amp_label"])
-        _draw_text(_px, _py, _p_text, size=_lbl_sz, color=TLFC_COLORS["elastic_per_label"])
+        _draw_text(_ax, _ay, _a_text, size=_lbl_sz, color=C["elastic_amp_label"])
+        _draw_text(_px, _py, _p_text, size=_lbl_sz, color=C["elastic_per_label"])
 
     else:
         # --- Bezier mode ---
@@ -1256,10 +1441,10 @@ def draw_editor_sidebar():
         _p3_in = sx0 <= p3s[0] <= sx1 and sy0 <= p3s[1] <= sy1
         _hl1 = _clip_line_to_rect(p0s, p1s, sx0, sy0, sx1, sy1)
         if _hl1:
-            _draw_aa_line_strip(_hl1, TLFC_COLORS["handle_line"], width=2.0)
+            _draw_aa_line_strip(_hl1, C["handle_line"], width=2.0)
         _hl2 = _clip_line_to_rect(p3s, p2s, sx0, sy0, sx1, sy1)
         if _hl2:
-            _draw_aa_line_strip(_hl2, TLFC_COLORS["handle_line"], width=2.0)
+            _draw_aa_line_strip(_hl2, C["handle_line"], width=2.0)
 
         # Bezier curve – scissor-clip to view rect so it never bleeds outside.
         curve_pts = []
@@ -1273,14 +1458,14 @@ def draw_editor_sidebar():
         for _i in range(len(curve_pts) - 1):
             _cs = _clip_line_to_rect(curve_pts[_i], curve_pts[_i + 1], sx0, sy0, sx1, sy1)
             if _cs:
-                _draw_aa_line_strip(_cs, TLFC_COLORS["curve_orange"], width=4.0)
+                _draw_aa_line_strip(_cs, C["curve_orange"], width=4.0)
 
         # --- Start / end point markers (only when anchor is inside view) ---
         _ep_r = 4.0 * size_scale
         if sx0 <= p0s[0] <= sx1 and sy0 <= p0s[1] <= sy1:
-            _draw_aa_circle(p0s[0], p0s[1], _ep_r, TLFC_COLORS["endpoint_fill"], TLFC_COLORS["endpoint_outline"])
+            _draw_aa_circle(p0s[0], p0s[1], _ep_r, C["endpoint_fill"], C["endpoint_outline"])
         if sx0 <= p3s[0] <= sx1 and sy0 <= p3s[1] <= sy1:
-            _draw_aa_circle(p3s[0], p3s[1], _ep_r, TLFC_COLORS["endpoint_fill"], TLFC_COLORS["endpoint_outline"])
+            _draw_aa_circle(p3s[0], p3s[1], _ep_r, C["endpoint_fill"], C["endpoint_outline"])
 
         # --- Handle circles (always drawn at clamped positions, always inside view) ---
         hover_handle = getattr(wm, 'tlfc_hover_handle', '')
@@ -1302,8 +1487,8 @@ def draw_editor_sidebar():
         _h2_w = blf.dimensions(0, _h2_text)[0]
         _h1x, _h1y = _label_pos(p1s[0], p1s[1], _h1_w, _lbl_h, _lbl_off, -4)
         _h2x, _h2y = _label_pos(p2s[0], p2s[1], _h2_w, _lbl_h, -_h2_w - _lbl_off, _lbl_off)
-        _draw_text(_h1x, _h1y, _h1_text, size=_lbl_sz, color=TLFC_COLORS["bezier_h1_label"])
-        _draw_text(_h2x, _h2y, _h2_text, size=_lbl_sz, color=TLFC_COLORS["bezier_h2_label"])
+        _draw_text(_h1x, _h1y, _h1_text, size=_lbl_sz, color=C["bezier_h1_label"])
+        _draw_text(_h2x, _h2y, _h2_text, size=_lbl_sz, color=C["bezier_h2_label"])
 
     area_ptr = ctx.area.as_pointer() if ctx.area else 0
     ui_map = ns.get(EDITOR_UI_KEY)
@@ -1326,6 +1511,10 @@ def draw_editor_sidebar():
         "h2": p2s,
         "h1_abs": (region.x + p1s[0], region.y + p1s[1]),
         "h2_abs": (region.x + p2s[0], region.y + p2s[1]),
+        "graph_sep_abs": (region.x + sx0, region.y + sy0 - _sep_hit,
+                          region.x + sx1, region.y + sy0 + _sep_hit),
+        "graph_sep_sy1": region.y + sy1,
+        "graph_sep_available_h": available_h,
         "buttons_abs": [],
     }
     # Register tab buttons for click hit-testing (must happen after ui_map is initialised)
@@ -1341,10 +1530,10 @@ def draw_editor_sidebar():
     # Draw interactive overlay buttons with responsive placement.
     bx0 = sx1 + 12
     bx1 = x1 - 10
-    gap = max(4, int(6 * size_scale))
-    row_h = max(18, int(22 * size_scale))
+    gap = max(3, int(4 * size_scale))
+    row_h = max(16, int(20 * size_scale))
     btn_font = max(9, int(10 * size_scale))
-    apply_h = max(24, int(30 * size_scale))
+    apply_h = max(22, int(26 * size_scale))
     tile = max(38, int(46 * size_scale))
     presets = _load_presets()
     side_has_space = (bx1 - bx0) > 80
@@ -1367,7 +1556,7 @@ def draw_editor_sidebar():
         ay1 = ay0 + apply_h
         apply_token = _button_token("apply", {})
         apply_state = "pressed" if pressed_token == apply_token else ("hover" if hover_token == apply_token else "normal")
-        apply_fill, apply_border, apply_text = _button_state_colors("apply", apply_state)
+        apply_fill, apply_border, apply_text = _button_state_colors("apply", apply_state, colors=C)
         _draw_rect(bx0, ay0, bx1, ay1, apply_fill)
         # _draw_aa_line_strip([(bx0, ay0), (bx1, ay0), (bx1, ay1), (bx0, ay1), (bx0, ay0)], apply_border, width=1.0)
         _draw_text_centered(bx0, ay0, bx1, ay1, _t(wm, "button.apply_curve", "APPLY CURVE"), size=btn_font, color=apply_text, truncate=True, pad=8)
@@ -1385,10 +1574,13 @@ def draw_editor_sidebar():
                 rx1 = bx1
                 ry1 = by
                 ry0 = ry1 - row_h
+                # Skip buttons that would overlap the APPLY button.
+                if ry0 < ay1 + gap:
+                    break
                 token = _button_token(b["op"], b["kwargs"])
                 state = "pressed" if pressed_token == token else ("hover" if hover_token == token else "normal")
                 kind = "auto_on" if (b["op"] == "toggle_auto" and wm.tlfc_auto_apply) else ("auto_off" if b["op"] == "toggle_auto" else "default")
-                fill, border_col, text_col = _button_state_colors(kind, state)
+                fill, border_col, text_col = _button_state_colors(kind, state, colors=C)
                 _draw_rect(rx0, ry0, rx1, ry1, fill)
                 # _draw_aa_line_strip([(rx0, ry0), (rx1, ry0), (rx1, ry1), (rx0, ry1), (rx0, ry0)], border_col, width=1.0)
                 _draw_text_centered(rx0, ry0, rx1, ry1, b["label"], size=btn_font, color=text_col, truncate=True, pad=6)
@@ -1403,15 +1595,18 @@ def draw_editor_sidebar():
             for row in _overlay_buttons(wm):
                 cols = len(row)
                 cell_w = (bx1 - bx0 - gap * (cols - 1)) / max(1, cols)
+                ry1 = by
+                ry0 = ry1 - row_h
+                # Skip row if it would overlap the APPLY button.
+                if ry0 < ay1 + gap:
+                    break
                 for i, b in enumerate(row):
                     rx0 = bx0 + i * (cell_w + gap)
                     rx1 = rx0 + cell_w
-                    ry1 = by
-                    ry0 = ry1 - row_h
                     token = _button_token(b["op"], b["kwargs"])
                     state = "pressed" if pressed_token == token else ("hover" if hover_token == token else "normal")
                     kind = "auto_on" if (b["op"] == "toggle_auto" and wm.tlfc_auto_apply) else ("auto_off" if b["op"] == "toggle_auto" else "default")
-                    fill, border_col, text_col = _button_state_colors(kind, state)
+                    fill, border_col, text_col = _button_state_colors(kind, state, colors=C)
                     _draw_rect(rx0, ry0, rx1, ry1, fill)
                     # _draw_aa_line_strip([(rx0, ry0), (rx1, ry0), (rx1, ry1), (rx0, ry1), (rx0, ry0)], border_col, width=1.0)
                     _draw_text_centered(rx0, ry0, rx1, ry1, b["label"], size=btn_font, color=text_col, truncate=True, pad=6)
@@ -1435,13 +1630,13 @@ def draw_editor_sidebar():
                 ty0 = ty1 - tile
                 if ty0 < y0 + apply_h + 20:
                     break
-                _draw_preset_tile(tx0, ty0, tx1, ty1, p, size_scale)
+                _draw_preset_tile(tx0, ty0, tx1, ty1, p, size_scale, colors=C)
                 token = _button_token("preset_apply", {"idx": idx})
                 if pressed_token == token:
-                    outline = _button_state_colors("preset", "pressed")[1]
+                    outline = _button_state_colors("preset", "pressed", colors=C)[1]
                     _draw_aa_line_strip([(tx0, ty0), (tx1, ty0), (tx1, ty1), (tx0, ty1), (tx0, ty0)], outline, width=4.0)
                 elif hover_token == token:
-                    outline = _button_state_colors("preset", "hover")[1]
+                    outline = _button_state_colors("preset", "hover", colors=C)[1]
                     _draw_aa_line_strip([(tx0, ty0), (tx1, ty0), (tx1, ty1), (tx0, ty1), (tx0, ty0)], outline, width=3.2)
                 ui_map[area_ptr]["buttons_abs"].append({
                     "rect": (region.x + tx0, region.y + ty0, region.x + tx1, region.y + ty1),
@@ -1459,7 +1654,8 @@ def draw_editor_sidebar():
             cell_w = (ux1 - ux0 - gap * (cols - 1)) / max(1, cols)
             ry1 = by
             ry0 = ry1 - row_h
-            if ry0 < y0 + 50:
+            # Drop button rows that would overlap the APPLY button area.
+            if ry0 < y0 + apply_h + 20:
                 break
             for i, b in enumerate(row):
                 rx0 = ux0 + i * (cell_w + gap)
@@ -1467,7 +1663,7 @@ def draw_editor_sidebar():
                 token = _button_token(b["op"], b["kwargs"])
                 state = "pressed" if pressed_token == token else ("hover" if hover_token == token else "normal")
                 kind = "auto_on" if (b["op"] == "toggle_auto" and wm.tlfc_auto_apply) else ("auto_off" if b["op"] == "toggle_auto" else "default")
-                fill, border_col, text_col = _button_state_colors(kind, state)
+                fill, border_col, text_col = _button_state_colors(kind, state, colors=C)
                 _draw_rect(rx0, ry0, rx1, ry1, fill)
                 # _draw_aa_line_strip([(rx0, ry0), (rx1, ry0), (rx1, ry1), (rx0, ry1), (rx0, ry0)], border_col, width=1.0)
                 _draw_text_centered(rx0, ry0, rx1, ry1, b["label"], size=btn_font, color=text_col, truncate=True, pad=6)
@@ -1491,7 +1687,7 @@ def draw_editor_sidebar():
                 ty0 = ty1 - tile
                 if ty0 < y0 + apply_h + 20:
                     break
-                _draw_preset_tile(tx0, ty0, tx1, ty1, p, size_scale)
+                _draw_preset_tile(tx0, ty0, tx1, ty1, p, size_scale, colors=C)
                 token = _button_token("preset_apply", {"idx": idx})
                 if pressed_token == token:
                     outline = _button_state_colors("preset", "pressed")[1]
@@ -1510,7 +1706,7 @@ def draw_editor_sidebar():
         ay0 = y0 + 10
         apply_token = _button_token("apply", {})
         apply_state = "pressed" if pressed_token == apply_token else ("hover" if hover_token == apply_token else "normal")
-        apply_fill, apply_border, apply_text = _button_state_colors("apply", apply_state)
+        apply_fill, apply_border, apply_text = _button_state_colors("apply", apply_state, colors=C)
         _draw_rect(ux0, ay0, ux1, ay1, apply_fill)
         # _draw_aa_line_strip([(ux0, ay0), (ux1, ay0), (ux1, ay1), (ux0, ay1), (ux0, ay0)], apply_border, width=1.0)
         _draw_text_centered(ux0, ay0, ux1, ay1, _t(wm, "button.apply_curve", "APPLY CURVE"), size=btn_font, color=apply_text, truncate=True, pad=8)
@@ -1557,14 +1753,14 @@ def draw_editor_sidebar():
         info_x = x0 + 10
         info_w = max(60.0, sx1 - info_x - 8)
         for line in info_lines:
-            _draw_text_clipped_left(info_x, y, info_w, line, size=info_size, color=TLFC_COLORS["info_text"], pad=2)
+            _draw_text_clipped_left(info_x, y, info_w, line, size=info_size, color=C["info_text"], pad=2)
             y -= info_step
-        _draw_text_clipped_left(info_x, y0 + 4, info_w, "{}: {}".format(_t(wm, 'info.curves', 'Curves'), len(selected_items)), size=info_size, color=TLFC_COLORS["info_footer_text"], pad=2)
+        _draw_text_clipped_left(info_x, y0 + 4, info_w, "{}: {}".format(_t(wm, 'info.curves', 'Curves'), len(selected_items)), size=info_size, color=C["info_footer_text"], pad=2)
     elif wm.tlfc_show_info and side_has_space:
         info_x = x0 + 10
         info_w = max(60.0, sx1 - info_x - 8)
         info_size = 14
-        _draw_text_clipped_left(info_x, sy0 - 16, info_w, _t(wm, "info.no_selected_keys", "No selected keys."), size=info_size, color=TLFC_COLORS["info_empty_text"], pad=2)
+        _draw_text_clipped_left(info_x, sy0 - 16, info_w, _t(wm, "info.no_selected_keys", "No selected keys."), size=info_size, color=C["info_empty_text"], pad=2)
 
     gpu.state.blend_set('NONE')
 # ---------- Redraw timer ----------
@@ -1602,7 +1798,7 @@ def redraw_timer():
                 if not scr:
                     continue
                 for area in scr.areas:
-                    if area.type in {'DOPESHEET_EDITOR', 'INFO'}:
+                    if area.type in {'DOPESHEET_EDITOR', 'INFO', 'GRAPH_EDITOR'}:
                         area.tag_redraw()
     except Exception:
         pass
@@ -1637,6 +1833,7 @@ class TLFC_PT_editor_header_dropdown(bpy.types.Panel):
             col.prop(wm, "tlfc_sidebar_width", text=_t(wm, "panel.sidebar_width", "Sidebar Width"))
             col.prop(wm, "tlfc_outer_pad", text=_t(wm, "panel.outer_padding", "Outer Padding"))
             col.prop(wm, "tlfc_alpha", text=_t(wm, "panel.background_alpha", "Background Alpha"))
+        col.prop(wm, "tlfc_graph_height_ratio", text=_t(wm, "panel.graph_height_ratio", "Graph Height Ratio"))
         col.prop(wm, "tlfc_samples", text=_t(wm, "panel.curve_samples", "Curve Samples"))
         col.prop(wm, "tlfc_display_size", text=_t(wm, "panel.display_size", "Display Size"))
         tog = col.row(align=True)
@@ -1677,7 +1874,7 @@ class TLFC_PT_editor_header_dropdown(bpy.types.Panel):
 
 def draw_tlfc_timeline_header(self, context):
     sp = context.space_data
-    if not sp or sp.type != 'DOPESHEET_EDITOR' or sp.mode != 'TIMELINE':
+    if not sp or sp.type != 'DOPESHEET_EDITOR':
         return
     if not _pref_bool("tlfc_show_timeline_header_button", _prop_default("tlfc_show_timeline_header_button")):
         return
@@ -1703,6 +1900,79 @@ def draw_tlfc_info_header(self, context):
     icon = 'IPO_BEZIER'
     row.operator("tlfc.toggle_editor_mode", text="", icon=icon, depress=is_on)
     row.popover(panel="TLFC_PT_editor_header_dropdown", text="")
+
+
+class TLFC_PT_graph_editor_header_dropdown(bpy.types.Panel):
+    bl_space_type = 'GRAPH_EDITOR'
+    bl_region_type = 'HEADER'
+    bl_label = 'Bezier Editor Settings'
+
+    @classmethod
+    def poll(cls, context):
+        sp = context.space_data
+        return _supports_editor_space(sp)
+
+    def draw(self, context):
+        layout = self.layout
+        wm = context.window_manager
+        sp = context.space_data
+
+        col = layout.column(align=True)
+        col.label(text=_t(wm, "panel.display", "Display"))
+        col.prop(wm, "tlfc_sidebar_width", text=_t(wm, "panel.sidebar_width", "Sidebar Width"))
+        col.prop(wm, "tlfc_outer_pad", text=_t(wm, "panel.outer_padding", "Outer Padding"))
+        col.prop(wm, "tlfc_alpha", text=_t(wm, "panel.background_alpha", "Background Alpha"))
+        col.prop(wm, "tlfc_graph_height_ratio", text=_t(wm, "panel.graph_height_ratio", "Graph Height Ratio"))
+        col.prop(wm, "tlfc_samples", text=_t(wm, "panel.curve_samples", "Curve Samples"))
+        col.prop(wm, "tlfc_display_size", text=_t(wm, "panel.display_size", "Display Size"))
+        tog = col.row(align=True)
+        tog.prop(wm, "tlfc_show_info", text=_t(wm, "panel.show_info", "Show Info"))
+        tog.prop(wm, "tlfc_auto_apply", text=_t(wm, "panel.auto_apply", "Auto Apply"))
+        col.prop(wm, "tlfc_grid_subdiv", text=_t(wm, "panel.grid_subdivisions", "Grid Subdivisions"))
+
+        col.separator()
+        col.label(text=_t(wm, "panel.editor", "Editor"))
+        h1 = col.row(align=True)
+        h1.prop(wm, "tlfc_h1x")
+        h1.prop(wm, "tlfc_h1y")
+        h2 = col.row(align=True)
+        h2.prop(wm, "tlfc_h2x")
+        h2.prop(wm, "tlfc_h2y")
+
+        col.separator()
+        nav = col.row(align=True)
+        nav.operator("tlfc.editor_zoom", text=_t(wm, "button.zoom_in", "Zoom +")).mode = 'IN'
+        nav.operator("tlfc.editor_zoom", text=_t(wm, "button.zoom_out", "Zoom -")).mode = 'OUT'
+        nav.operator("tlfc.editor_zoom", text=_t(wm, "button.center", "Center")).mode = 'CENTER'
+
+        ease = col.row(align=True)
+        ease.operator("tlfc.set_interpolation", text=_t(wm, "button.linear", "Linear")).mode = 'LINEAR'
+        ease.operator("tlfc.set_interpolation", text=_t(wm, "button.constant", "Constant")).mode = 'CONSTANT'
+        ease.operator("tlfc.mirror_curve", text=_t(wm, "button.mirror", "Mirror"))
+        ease.operator("tlfc.reset_curve", text=_t(wm, "button.reset", "Reset"))
+
+        col.operator("tlfc.read_curve", text=_t(wm, "panel.read_curve", "Read curve from Keyframe"))
+        col.operator("tlfc.save_preset", text=_t(wm, "button.save_preset", "Save Preset"))
+        col.operator("tlfc.open_preset_file", text=_t(wm, "panel.open_preset_file", "Open Preset File"))
+
+        col.separator()
+        apply_row = col.row()
+        apply_row.scale_y = 1.5
+        apply_row.operator("tlfc.apply_curve", text=_t(wm, "button.apply_curve", "APPLY CURVE"))
+
+
+def draw_tlfc_graph_header(self, context):
+    sp = context.space_data
+    if not sp or sp.type != 'GRAPH_EDITOR':
+        return
+    if not _pref_bool("tlfc_show_graph_header_button", _prop_default("tlfc_show_graph_header_button")):
+        return
+    wm = context.window_manager
+    row = self.layout.row(align=True)
+    is_on = _is_editor_enabled(context.area) and wm.tlfc_mouse_editing
+    icon = 'IPO_BEZIER'
+    row.operator("tlfc.toggle_editor_mode", text="", icon=icon, depress=is_on)
+    row.popover(panel="TLFC_PT_graph_editor_header_dropdown", text="")
 
 
 class TLFC_OT_toggle_editor_mode(bpy.types.Operator):
@@ -1884,8 +2154,16 @@ class TLFC_OT_mouse_edit_curve(bpy.types.Operator):
                 break
         wm.tlfc_hover_button = hovered_token
 
+        # Graph separator hover detection — suppress when a handle is hovered
+        # so the user can grab handles near the separator without accidentally resizing.
+        sep_rect = ui.get("graph_sep_abs")
+        handle_nearby = (wm.tlfc_hover_handle != "")
+        wm.tlfc_hover_graph_sep = (not handle_nearby) and (_point_in_rect(mx_abs, my_abs, sep_rect) if sep_rect else False)
+
         if self._drag == "sidebar" or getattr(wm, "tlfc_dragging_sidebar", False):
             self._set_modal_cursor(context, 'MOVE_X')
+        elif self._drag == "graph_sep" or wm.tlfc_hover_graph_sep:
+            self._set_modal_cursor(context, 'MOVE_Y')
         elif hovered_token:
             self._set_modal_cursor(context, 'HAND_POINT')
         elif wm.tlfc_hover_sidebar_edge:
@@ -1900,6 +2178,8 @@ class TLFC_OT_mouse_edit_curve(bpy.types.Operator):
                 wm.tlfc_pressed_button = ""
                 return {'RUNNING_MODAL'}
 
+            # Handles take priority over the separator to prevent accidental
+            # resize when grabbing a handle near the bottom of the graph.
             h1 = ui["h1_abs"]
             h2 = ui["h2_abs"]
             d1 = (mx_abs - h1[0]) * (mx_abs - h1[0]) + (my_abs - h1[1]) * (my_abs - h1[1])
@@ -1910,6 +2190,11 @@ class TLFC_OT_mouse_edit_curve(bpy.types.Operator):
                 return {'RUNNING_MODAL'}
             if d2 <= handle_hit_sq:
                 self._drag = "h2"
+                wm.tlfc_pressed_button = ""
+                return {'RUNNING_MODAL'}
+
+            if wm.tlfc_hover_graph_sep:
+                self._drag = "graph_sep"
                 wm.tlfc_pressed_button = ""
                 return {'RUNNING_MODAL'}
 
@@ -2057,11 +2342,28 @@ class TLFC_OT_mouse_edit_curve(bpy.types.Operator):
                         if not scr:
                             continue
                         for area in scr.areas:
-                            if area.type in {'DOPESHEET_EDITOR', 'INFO'}:
+                            if area.type in {'DOPESHEET_EDITOR', 'INFO', 'GRAPH_EDITOR'}:
                                 area.tag_redraw()
             except Exception:
                 if context.area:
                     context.area.tag_redraw()
+            return {'RUNNING_MODAL'}
+
+        if event.type == 'MOUSEMOVE' and self._drag == "graph_sep":
+            region_y = context.region.y if context.region else 0
+            sy1_abs = float(ui.get("graph_sep_sy1", my_abs))
+            available_h = max(1.0, float(ui.get("graph_sep_available_h", 1.0)))
+            # sy1_abs is the top of the graph area in window space.
+            # (sy1_abs - my_abs) is the current height of the graph.
+            new_ratio = (sy1_abs - my_abs) / available_h
+            clamped = _clamp_prop("tlfc_graph_height_ratio", new_ratio)
+            wm.tlfc_graph_height_ratio = clamped
+            # Persist to addon preferences so it survives restarts.
+            prefs = _addon_prefs()
+            if prefs is not None:
+                prefs.tlfc_graph_height_ratio = clamped
+            if context.area:
+                context.area.tag_redraw()
             return {'RUNNING_MODAL'}
 
         if event.type == 'MOUSEMOVE' and self._drag == "pan":
@@ -2296,6 +2598,19 @@ class TLFC_AP_addon_preferences(bpy.types.AddonPreferences):
         description="Show Bezier editor toggle and dropdown in Info header",
         default=TLFC_PROPERTY_DEFAULTS["tlfc_show_info_header_button"],
     )
+    tlfc_show_graph_header_button: bpy.props.BoolProperty(
+        name="Show Graph Header Button",
+        description="Show Bezier editor toggle and dropdown in Graph Editor header",
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_show_graph_header_button"],
+    )
+    tlfc_graph_height_ratio: bpy.props.FloatProperty(
+        name="Graph Height Ratio",
+        description="Height of the editor graph as a ratio of available panel height (persistent)",
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_graph_height_ratio"],
+        min=TLFC_PROPERTY_RANGES["tlfc_graph_height_ratio"][0],
+        max=TLFC_PROPERTY_RANGES["tlfc_graph_height_ratio"][1],
+        subtype='FACTOR',
+    )
 
     def draw(self, context):
         layout = self.layout
@@ -2306,6 +2621,7 @@ class TLFC_AP_addon_preferences(bpy.types.AddonPreferences):
         rowB = col.row(align=True)
         rowB.prop(self, "tlfc_show_timeline_header_button", text=_t(wm, "prefs.show_timeline_button", "Show Timeline Header Button"))
         rowB.prop(self, "tlfc_show_info_header_button", text=_t(wm, "prefs.show_info_button", "Show Info Header Button"))
+        rowB.prop(self, "tlfc_show_graph_header_button", text=_t(wm, "prefs.show_graph_button", "Show Graph Header Button"))
 
 
 classes = (
@@ -2321,6 +2637,7 @@ classes = (
     TLFC_OT_save_preset,
     TLFC_OT_open_preset_file,
     TLFC_PT_editor_header_dropdown,
+    TLFC_PT_graph_editor_header_dropdown,
 )
 def _cleanup_previous():
     ns = bpy.app.driver_namespace
@@ -2338,6 +2655,13 @@ def _cleanup_previous():
         except Exception:
             pass
         ns.pop(INFO_ADDON_KEY, None)
+    old_graph_handle = ns.get(GRAPH_ADDON_KEY)
+    if old_graph_handle is not None:
+        try:
+            bpy.types.SpaceGraphEditor.draw_handler_remove(old_graph_handle, 'WINDOW')
+        except Exception:
+            pass
+        ns.pop(GRAPH_ADDON_KEY, None)
     if bpy.app.timers.is_registered(redraw_timer):
         try:
             bpy.app.timers.unregister(redraw_timer)
@@ -2364,6 +2688,14 @@ def _disable_runtime_handlers(clear_ui=True):
             pass
         ns.pop(INFO_ADDON_KEY, None)
 
+    old_graph_handle = ns.get(GRAPH_ADDON_KEY)
+    if old_graph_handle is not None:
+        try:
+            bpy.types.SpaceGraphEditor.draw_handler_remove(old_graph_handle, 'WINDOW')
+        except Exception:
+            pass
+        ns.pop(GRAPH_ADDON_KEY, None)
+
     if bpy.app.timers.is_registered(redraw_timer):
         try:
             bpy.app.timers.unregister(redraw_timer)
@@ -2387,6 +2719,12 @@ def _ensure_runtime_handlers():
             draw_editor_sidebar, (), 'WINDOW', 'POST_PIXEL'
         )
         ns[INFO_ADDON_KEY] = info_handle
+
+    if ns.get(GRAPH_ADDON_KEY) is None:
+        graph_handle = bpy.types.SpaceGraphEditor.draw_handler_add(
+            draw_editor_sidebar, (), 'WINDOW', 'POST_PIXEL'
+        )
+        ns[GRAPH_ADDON_KEY] = graph_handle
 
     if not bpy.app.timers.is_registered(redraw_timer):
         bpy.app.timers.register(redraw_timer, first_interval=0.1)
@@ -2470,6 +2808,20 @@ def register():
             ('ELASTIC', 'Elastic', 'Elastic ease-out editor'),
         ],
         default=TLFC_PROPERTY_DEFAULTS["tlfc_sidebar_mode"],
+    )
+    bpy.types.WindowManager.tlfc_graph_height_ratio = bpy.props.FloatProperty(
+        name="Graph Height Ratio",
+        description="Height of the editor graph as a ratio of available panel height",
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_graph_height_ratio"],
+        min=TLFC_PROPERTY_RANGES["tlfc_graph_height_ratio"][0],
+        max=TLFC_PROPERTY_RANGES["tlfc_graph_height_ratio"][1],
+        subtype='FACTOR',
+        update=_sync_graph_height_to_prefs,
+    )
+    bpy.types.WindowManager.tlfc_hover_graph_sep = bpy.props.BoolProperty(
+        name="Hover Graph Separator",
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_hover_graph_sep"],
+        options={'HIDDEN'},
     )
     bpy.types.WindowManager.tlfc_elastic_amplitude = bpy.props.FloatProperty(
         name="Elastic Amplitude",
@@ -2575,15 +2927,62 @@ def register():
     )
     bpy.types.DOPESHEET_HT_header.append(draw_tlfc_timeline_header)
     bpy.types.INFO_HT_header.append(draw_tlfc_info_header)
+    bpy.types.GRAPH_HT_header.append(draw_tlfc_graph_header)
+
+    # Restore persistent graph height ratio from addon preferences.
+    if _on_load_post not in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.append(_on_load_post)
+    # Also initialize on register (first-time enable) via a deferred timer
+    # since WindowManager instance isn't fully ready at register time.
+    if not bpy.app.timers.is_registered(_init_persistent_props):
+        bpy.app.timers.register(_init_persistent_props, first_interval=0.1)
+
+def _init_persistent_props():
+    """Deferred one-shot: copy persistent addon-pref values to the WM runtime properties."""
+    try:
+        prefs = _addon_prefs()
+        if prefs is not None:
+            wm = bpy.context.window_manager
+            wm.tlfc_graph_height_ratio = prefs.tlfc_graph_height_ratio
+    except Exception:
+        pass
+    return None  # None = don't repeat
+
+@bpy.app.handlers.persistent
+def _on_load_post(dummy):
+    """Restore persistent properties after a blend file is loaded."""
+    try:
+        prefs = _addon_prefs()
+        if prefs is not None:
+            wm = bpy.context.window_manager
+            wm.tlfc_graph_height_ratio = prefs.tlfc_graph_height_ratio
+    except Exception:
+        pass
+
 def unregister():
     bpy.app.translations.unregister(ADDON_MODULE_KEY)
     _cleanup_previous()
+    # Remove the persistent load handler.
+    try:
+        bpy.app.handlers.load_post.remove(_on_load_post)
+    except (ValueError, Exception):
+        pass
+    # Remove the deferred init timer if it's still pending.
+    if bpy.app.timers.is_registered(_init_persistent_props):
+        try:
+            bpy.app.timers.unregister(_init_persistent_props)
+        except Exception:
+            pass
     try:
         bpy.types.DOPESHEET_HT_header.remove(draw_tlfc_timeline_header)
     except Exception:
         pass
     try:
         bpy.types.INFO_HT_header.remove(draw_tlfc_info_header)
+    except Exception:
+        pass
+    try:
+        bpy.types.GRAPH_HT_header.remove(draw_tlfc_graph_header)
     except Exception:
         pass
     try:
@@ -2620,6 +3019,8 @@ def unregister():
         "tlfc_pressed_button",
         "tlfc_hover_handle",
         "tlfc_sidebar_mode",
+        "tlfc_graph_height_ratio",
+        "tlfc_hover_graph_sep",
         "tlfc_elastic_amplitude",
         "tlfc_elastic_period",
     ):
