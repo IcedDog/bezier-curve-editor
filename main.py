@@ -623,6 +623,23 @@ def _theme_colors():
 
     curve_selected = _pick("common.anim.keyframe_selected")
 
+    # Read the actual grid color from the dopesheet/graph editor theme.
+    # Try dopesheet first, then graph_editor, then nla_editor as fallbacks.
+    grid_c = None
+    for _editor_key in ("dopesheet_editor", "graph_editor", "nla_editor"):
+        try:
+            _eds = getattr(theme, _editor_key, None)
+            if _eds is not None:
+                _gc = _rgba(getattr(_eds, "grid", None), 1.0)
+                if _gc is not None:
+                    grid_c = _gc
+                    break
+        except Exception:
+            pass
+    # Final fallback: derive a visible grid color from reg_text at low alpha.
+    if grid_c is None:
+        grid_c = _alpha(reg_text, 0.5) if reg_text else None
+
     palette = {
         "white": _alpha(reg_text_sel, 1.0),
         "text_default": _alpha(reg_text, 1.0),
@@ -650,9 +667,9 @@ def _theme_colors():
         "tab_inactive_text": _alpha(tab_text, 1.0),
         "tab_inactive_hover_text": _alpha(tab_text_sel, 1.0),
         "tab_active_outline": _alpha(tab_outline, 0.9),
-        "grid_axis": _alpha(menu_outline, 1.0),
-        "grid_boundary": _alpha(menu_outline, 0.9),
-        "grid_regular": _alpha(menu_outline, 0.65),
+        "grid_axis": _alpha(grid_c, 1.0),
+        "grid_boundary": _alpha(grid_c, 0.85),
+        "grid_regular": _alpha(grid_c, 0.55),
         "elastic_curve": _alpha(curve_selected, 1.0),
         "endpoint_fill": _alpha(reg_inner, 1.0),
         "endpoint_outline": _alpha(reg_text, 0.6),
@@ -667,7 +684,7 @@ def _theme_colors():
         "bezier_h1_label": _alpha(state_overridden, 0.75),
         "bezier_h2_label": _alpha(state_changed, 0.75),
         "panel_bg": _alpha(menu_inner, 1.0),
-        "panel_border": _alpha(menu_inner, 1.0),
+        "panel_border": _alpha(menu_outline, 1.0),
         "panel_border_hover": _alpha(menu_outline, 1.0),
         "info_text": _alpha(menu_text, 1.0),
         "info_footer_text": _alpha(menu_text, 0.85),
@@ -960,18 +977,22 @@ def _segment_from_selected_key(context, selected_items):
     key_pos = {id(kp): i for i, kp in enumerate(key_sorted)}
     frame_now = context.scene.frame_current
 
-    # Prefer the selected key closest to current frame.
-    cur = min(sel_keys, key=lambda kp: abs(kp.co[0] - frame_now))
-    idx = key_pos.get(id(cur), -1)
-    if idx < 0 or idx >= len(key_sorted) - 1:
+    # If exactly two keys are selected, use them as the segment.
+    if len(sel_keys) == 2:
+        k0, k1 = sorted(sel_keys, key=lambda kp: kp.co[0])
+    else:
+        # Otherwise, pick the selected key closest to current frame and its successor.
+        cur = min(sel_keys, key=lambda kp: abs(kp.co[0] - frame_now))
+        idx = key_pos.get(id(cur), -1)
+        if idx < 0 or idx >= len(key_sorted) - 1:
+            return None
+        k0, k1 = cur, key_sorted[idx + 1]
+
+    if k1.co[0] <= k0.co[0]:
         return None
 
-    nxt = key_sorted[idx + 1]
-    if nxt.co[0] <= cur.co[0]:
-        return None
-
-    f0, v0 = cur.co[0], cur.co[1]
-    f1, v1 = nxt.co[0], nxt.co[1]
+    f0, v0 = k0.co[0], k0.co[1]
+    f1, v1 = k1.co[0], k1.co[1]
     df = f1 - f0
     dv = v1 - v0
     if abs(df) < 1e-8:
@@ -984,14 +1005,14 @@ def _segment_from_selected_key(context, selected_items):
 
     return {
         "fc": fc,
-        "k0": cur,
-        "k1": nxt,
+        "k0": k0,
+        "k1": k1,
         "f0": f0,
         "v0": v0,
         "df": df,
         "dv": dv,
-        "c1": to_norm(cur.handle_right),
-        "c2": to_norm(nxt.handle_left),
+        "c1": to_norm(k0.handle_right),
+        "c2": to_norm(k1.handle_left),
     }
 
 def _bezier_point(t, p0, p1, p2, p3):
@@ -2581,9 +2602,33 @@ class TLFC_OT_read_curve(bpy.types.Operator):
             self.report({'INFO'}, _t(wm, "report.elastic_loaded", "Elastic curve loaded from selected key segment"))
         else:
             wm.tlfc_sidebar_mode = 'BEZIER'
-            wm.tlfc_h1x, wm.tlfc_h1y = seg["c1"]
-            wm.tlfc_h2x, wm.tlfc_h2y = seg["c2"]
-            self.report({'INFO'}, _t(wm, "report.bezier_loaded", "Bezier curve loaded from selected key segment"))
+            interp = getattr(k0, "interpolation", "BEZIER") if k0 else "BEZIER"
+
+            if interp == 'LINEAR':
+                # Linear is a straight diagonal — handles at 1/3 and 2/3 along the diagonal.
+                wm.tlfc_h1x, wm.tlfc_h1y = 1/3, 1/3
+                wm.tlfc_h2x, wm.tlfc_h2y = 2/3, 2/3
+                self.report({'INFO'}, _t(wm, "report.linear_loaded", "Linear curve loaded from selected key segment"))
+            elif interp == 'CONSTANT':
+                # Constant holds value then steps — flat handles at the bottom.
+                wm.tlfc_h1x, wm.tlfc_h1y = 1/3, 0.0
+                wm.tlfc_h2x, wm.tlfc_h2y = 2/3, 0.0
+                self.report({'INFO'}, _t(wm, "report.constant_loaded", "Constant curve loaded from selected key segment"))
+            else:
+                # BEZIER: only trust stored handle positions when handle types are
+                # FREE or ALIGNED — those actually define the curve shape.
+                # AUTO/VECTOR handles are auto-computed; raw positions don't match
+                # what the curve looks like, so fall back to the linear shape.
+                trusted_types = {'FREE', 'ALIGNED'}
+                h0_type = getattr(k0, "handle_right_type", "FREE") if k0 else "FREE"
+                h1_type = getattr(k1, "handle_left_type", "FREE") if k1 else "FREE"
+                if h0_type in trusted_types and h1_type in trusted_types:
+                    wm.tlfc_h1x, wm.tlfc_h1y = seg["c1"]
+                    wm.tlfc_h2x, wm.tlfc_h2y = seg["c2"]
+                else:
+                    wm.tlfc_h1x, wm.tlfc_h1y = 1/3, 1/3
+                    wm.tlfc_h2x, wm.tlfc_h2y = 2/3, 2/3
+                self.report({'INFO'}, _t(wm, "report.bezier_loaded", "Bezier curve loaded from selected key segment"))
         return {'FINISHED'}
 
 
