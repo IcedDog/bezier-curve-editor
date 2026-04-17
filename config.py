@@ -31,6 +31,7 @@ TLFC_PROPERTY_DEFAULTS = {
 	"tlfc_h2x": 0.667,
 	"tlfc_h2y": 1.0,
 	"tlfc_sidebar_mode": "BEZIER",
+	"tlfc_elastic_ease_mode": "EASE_OUT",
 	"tlfc_elastic_amplitude": 1.0,
 	"tlfc_elastic_period": 0.3,
 	"tlfc_grid_subdiv": 4,

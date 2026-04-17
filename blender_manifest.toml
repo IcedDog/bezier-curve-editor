@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "bezier_curve_editor"
-version = "1.0.6"
+version = "1.0.7"
 name = "Bezier Curve Editor"
 tagline = "An editor for editing and applying easing curves"
 maintainer = "IcedDog"

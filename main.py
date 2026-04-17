@@ -69,6 +69,10 @@ def _unit_to_prop(name, unit_value):
     return _clamp_prop(name, float(min_v) + u * (float(max_v) - float(min_v)))
 
 
+def _normalize_elastic_ease_mode(value):
+    return 'EASE_IN' if str(value) == 'EASE_IN' else 'EASE_OUT'
+
+
 def _reset_ui_state(wm, *, clear_drag=True, clear_hover=True, clear_buttons=True, clear_handle=True):
     if clear_hover:
         wm.tlfc_hover_sidebar = False
@@ -308,10 +312,21 @@ def _load_presets(force=False):
                 "name": str(p.get("name", "Preset")),
                 "type": str(p.get("type", "BEZIER")),  # Default to BEZIER for backwards compatibility
             }
+            raw_color = p.get("color")
+            if isinstance(raw_color, (list, tuple)) and len(raw_color) >= 3:
+                try:
+                    preset["color"] = [
+                        _clamp01(float(raw_color[0])),
+                        _clamp01(float(raw_color[1])),
+                        _clamp01(float(raw_color[2])),
+                    ]
+                except Exception:
+                    pass
             # Load type-specific parameters
             if preset["type"] == "ELASTIC":
                 preset["amplitude"] = float(p.get("amplitude", _prop_default("tlfc_elastic_amplitude")))
                 preset["period"] = float(p.get("period", _prop_default("tlfc_elastic_period")))
+                preset["ease_mode"] = _normalize_elastic_ease_mode(p.get("ease_mode", _prop_default("tlfc_elastic_ease_mode")))
             else:
                 # BEZIER or fallback
                 preset["h1x"] = float(p.get("h1x", _prop_default("tlfc_h1x")))
@@ -349,6 +364,7 @@ def _add_current_preset(wm):
     if _mode_val == 'ELASTIC':
         preset["amplitude"] = float(getattr(wm, 'tlfc_elastic_amplitude', _prop_default("tlfc_elastic_amplitude")))
         preset["period"] = float(getattr(wm, 'tlfc_elastic_period', _prop_default("tlfc_elastic_period")))
+        preset["ease_mode"] = _normalize_elastic_ease_mode(getattr(wm, 'tlfc_elastic_ease_mode', _prop_default("tlfc_elastic_ease_mode")))
     else:
         preset["h1x"] = float(wm.tlfc_h1x)
         preset["h1y"] = float(wm.tlfc_h1y)
@@ -371,6 +387,7 @@ def _apply_preset_index(wm, idx):
     if preset_type == "ELASTIC":
         wm.tlfc_elastic_amplitude = p.get("amplitude", _prop_default("tlfc_elastic_amplitude"))
         wm.tlfc_elastic_period = p.get("period", _prop_default("tlfc_elastic_period"))
+        wm.tlfc_elastic_ease_mode = _normalize_elastic_ease_mode(p.get("ease_mode", _prop_default("tlfc_elastic_ease_mode")))
     else:
         wm.tlfc_h1x = p.get("h1x", _prop_default("tlfc_h1x"))
         wm.tlfc_h1y = p.get("h1y", _prop_default("tlfc_h1y"))
@@ -389,7 +406,22 @@ def _delete_preset_index(idx):
 
 def _draw_preset_tile(x0, y0, x1, y1, preset, size_scale, colors=None):
     C = colors if colors is not None else TLFC_COLORS
-    _draw_rect(x0, y0, x1, y1, C["preset_tile_bg"])
+    tile_bg = C["preset_tile_bg"]
+    title_color = C["preset_title_text"]
+    preset_color = preset.get("color") if isinstance(preset, dict) else None
+    if isinstance(preset_color, (list, tuple)) and len(preset_color) >= 3:
+        try:
+            r = _clamp01(float(preset_color[0]))
+            g = _clamp01(float(preset_color[1]))
+            b = _clamp01(float(preset_color[2]))
+            tile_bg = (r, g, b, 1.0)
+            # Keep readable title text on arbitrary user colors.
+            luma = (0.2126 * r) + (0.7152 * g) + (0.0722 * b)
+            title_color = (0.0, 0.0, 0.0, 1.0) if luma >= 0.58 else (1.0, 1.0, 1.0, 1.0)
+        except Exception:
+            tile_bg = C["preset_tile_bg"]
+            title_color = C["preset_title_text"]
+    _draw_rect(x0, y0, x1, y1, tile_bg)
     _draw_aa_line_strip([(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)], C["preset_tile_border"], width=2.0)
     pad = max(4, int(5 * size_scale))
     ix0 = x0 + pad
@@ -406,11 +438,16 @@ def _draw_preset_tile(x0, y0, x1, y1, preset, size_scale, colors=None):
     if preset_type == "ELASTIC":
         amplitude = preset.get("amplitude", _prop_default("tlfc_elastic_amplitude"))
         period = preset.get("period", _prop_default("tlfc_elastic_period"))
+        ease_mode = preset.get("ease_mode", _prop_default("tlfc_elastic_ease_mode"))
         for i in range(preview_steps):
             t = i / (preview_steps - 1.0)
             bx = t
-            by = _elastic_ease_out_normalized(t, amplitude, period)
-            by_clamped = max(0.0, min(1.0, by / 2.0))
+            if ease_mode == 'EASE_IN':
+                by = _elastic_ease_in_normalized(t, amplitude, period)
+                by_clamped = max(0.0, min(1.0, 0.5 + (by * 0.5)))
+            else:
+                by = _elastic_ease_out_normalized(t, amplitude, period)
+                by_clamped = max(0.0, min(1.0, by * 0.5))
             pts.append((ix0 + bx * (ix1 - ix0), iy0 + by_clamped * (iy1 - iy0)))
     else:
         h1x = max(0.0, float(preset.get("h1x", _prop_default("tlfc_h1x"))))
@@ -427,7 +464,7 @@ def _draw_preset_tile(x0, y0, x1, y1, preset, size_scale, colors=None):
             pts.append((ix0 + bx * (ix1 - ix0), iy0 + by * (iy1 - iy0)))
 
     _draw_aa_line_strip(pts, C["curve_orange"], width=2.0)
-    _draw_text_centered(x0, y0, x1, y0 + 12, preset.get("name", "P"), size=max(8, int(9 * size_scale)), color=C["preset_title_text"], truncate=True, pad=4)
+    _draw_text_centered(x0, y0, x1, y0 + 12, preset.get("name", "P"), size=max(8, int(9 * size_scale)), color=title_color, truncate=True, pad=4)
 
 # ---------- Drawing helpers ----------
 def _draw_rect(x0, y0, x1, y1, color):
@@ -711,7 +748,47 @@ def _elastic_ease_out_normalized(t, amplitude=1.0, period=0.3):
     return (f * (amp * math.pow(2.0, 10.0 * time) * math.sin((time - s) * (2.0 * math.pi) / per))) + 1.0
 
 
-def _apply_elastic_to_segment(fc, k0, k1, amplitude, period):
+def _elastic_ease_in_normalized(t, amplitude=1.0, period=0.3):
+    if t <= 0.0:
+        return 0.0
+    if t >= 1.0:
+        return 1.0
+    per = max(0.001, float(period))
+    amp_in = max(0.0, float(amplitude))
+
+    time = float(t) - 1.0
+    f = 1.0
+
+    if amp_in < 1.0:
+        s = per / 4.0
+        blend_t = abs(s)
+        if amp_in > 0.0:
+            f *= amp_in
+        else:
+            f = 0.0
+        if blend_t > 1e-8 and abs(time) < blend_t:
+            l = abs(time) / blend_t
+            f = (f * l) + (1.0 - l)
+        amp = 1.0
+    else:
+        amp = amp_in
+        asin_arg = max(-1.0, min(1.0, 1.0 / amp))
+        s = per / (2.0 * math.pi) * math.asin(asin_arg)
+
+    return -(f * (amp * math.pow(2.0, 10.0 * time) * math.sin((time - s) * (2.0 * math.pi) / per)))
+
+
+def _elastic_amp_handle_x(ease_mode):
+    base_x = float(TLFC_UI_NUMBERS["elastic_handle_x"])
+    return (1.0 - base_x) if ease_mode == 'EASE_IN' else base_x
+
+
+def _elastic_per_handle_y(ease_mode):
+    base_y = float(TLFC_UI_NUMBERS["elastic_handle_y"])
+    return (1.0 - base_y) if ease_mode == 'EASE_IN' else base_y
+
+
+def _apply_elastic_to_segment(fc, k0, k1, amplitude, period, ease_mode='EASE_OUT'):
     """Apply elastic ease out to keyframe segment using ELASTIC interpolation."""
     f0, v0 = k0.co[0], k0.co[1]
     f1, v1 = k1.co[0], k1.co[1]
@@ -735,7 +812,7 @@ def _apply_elastic_to_segment(fc, k0, k1, amplitude, period):
     # Set keyframe interpolation to ELASTIC and apply parameters
     try:
         k0.interpolation = 'ELASTIC'
-        k0.easing = 'EASE_OUT'
+        k0.easing = 'EASE_IN' if ease_mode == 'EASE_IN' else 'EASE_OUT'
         k0.amplitude = amp_scaled
         k0.period = period * df
         k1.interpolation = 'ELASTIC'
@@ -1368,13 +1445,19 @@ def draw_editor_sidebar():
         # Editor ranges: amplitude 0.0–1.0, period 0.05–1.0
         _el_amp = _clamp_prop("tlfc_elastic_amplitude", getattr(wm, 'tlfc_elastic_amplitude', _prop_default("tlfc_elastic_amplitude")))
         _el_per = _clamp_prop("tlfc_elastic_period", getattr(wm, 'tlfc_elastic_period', _prop_default("tlfc_elastic_period")))
+        _el_ease = _normalize_elastic_ease_mode(getattr(wm, 'tlfc_elastic_ease_mode', _prop_default("tlfc_elastic_ease_mode")))
+        _el_amp_x = _elastic_amp_handle_x(_el_ease)
+        _el_per_y = _elastic_per_handle_y(_el_ease)
 
         # --- Draw elastic curve, clipped to the graph box via scissor ---
         _el_n = max(96, wm.tlfc_samples * 3)
         _el_pts = []
         for _si in range(_el_n):
             _st = _si / (_el_n - 1.0)
-            _sv = _elastic_ease_out_normalized(_st, _el_amp, _el_per) * 0.5
+            if _el_ease == 'EASE_IN':
+                _sv = 0.5 + (_elastic_ease_in_normalized(_st, _el_amp, _el_per) * 0.5)
+            else:
+                _sv = _elastic_ease_out_normalized(_st, _el_amp, _el_per) * 0.5
             _el_pts.append(_editor_to_screen(_st, _sv, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y))
 
         # Proper segment-level clip using Cohen-Sutherland (matches grid behavior).
@@ -1386,15 +1469,20 @@ def draw_editor_sidebar():
         # Handle positions in normalized editor space mapped from configured ranges.
         _amp_norm = _prop_to_unit("tlfc_elastic_amplitude", _el_amp)
         _per_norm = _prop_to_unit("tlfc_elastic_period", _el_per)
-        p1s_raw = _editor_to_screen(TLFC_UI_NUMBERS["elastic_handle_x"], _amp_norm, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
-        p2s_raw = _editor_to_screen(_per_norm, TLFC_UI_NUMBERS["elastic_handle_y"], sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
+        _per_x = (1.0 - _per_norm) if _el_ease == 'EASE_IN' else _per_norm
+        p1s_raw = _editor_to_screen(_el_amp_x, _amp_norm, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
+        p2s_raw = _editor_to_screen(_per_x, _el_per_y, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
         # Clamp handle positions to view rect for drawing and hit-testing.
         p1s = _clamp_to_view(*p1s_raw)
         p2s = _clamp_to_view(*p2s_raw)
 
         # --- Start / end point markers (only when inside view) ---
-        _p_start = _editor_to_screen(0.0, 0.0, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
-        _p_end   = _editor_to_screen(1.0, 0.5, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
+        if _el_ease == 'EASE_IN':
+            _p_start = _editor_to_screen(0.0, 0.5, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
+            _p_end = _editor_to_screen(1.0, 1.0, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
+        else:
+            _p_start = _editor_to_screen(0.0, 0.0, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
+            _p_end = _editor_to_screen(1.0, 0.5, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
         _ep_r = 4.0 * size_scale
         if sx0 <= _p_start[0] <= sx1 and sy0 <= _p_start[1] <= sy1:
             _draw_aa_circle(_p_start[0], _p_start[1], _ep_r, C["endpoint_fill"], C["endpoint_outline"])
@@ -1402,13 +1490,13 @@ def draw_editor_sidebar():
             _draw_aa_circle(_p_end[0], _p_end[1], _ep_r, C["endpoint_fill"], C["endpoint_outline"])
 
         # --- Axis guide lines (clipped to view) ---
-        _g_amp_bot = _editor_to_screen(TLFC_UI_NUMBERS["elastic_handle_x"], 0.0, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
-        _g_amp_top = _editor_to_screen(TLFC_UI_NUMBERS["elastic_handle_x"], 1.0, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
+        _g_amp_bot = _editor_to_screen(_el_amp_x, 0.0, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
+        _g_amp_top = _editor_to_screen(_el_amp_x, 1.0, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
         _gc = _clip_line_to_rect(_g_amp_bot, _g_amp_top, sx0, sy0, sx1, sy1)
         if _gc:
             _draw_aa_line_strip(_gc, C["elastic_amp_guide"], width=4.0)
-        _g_per_l = _editor_to_screen(0.0, TLFC_UI_NUMBERS["elastic_handle_y"], sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
-        _g_per_r = _editor_to_screen(1.0, TLFC_UI_NUMBERS["elastic_handle_y"], sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
+        _g_per_l = _editor_to_screen(0.0, _el_per_y, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
+        _g_per_r = _editor_to_screen(1.0, _el_per_y, sx0, sy0, sx1, sy1, zoom, pan_x, pan_y)
         _gp = _clip_line_to_rect(_g_per_l, _g_per_r, sx0, sy0, sx1, sy1)
         if _gp:
             _draw_aa_line_strip(_gp, C["elastic_per_guide"], width=4.0)
@@ -2121,9 +2209,6 @@ class TLFC_OT_mouse_edit_curve(bpy.types.Operator):
             self._clear_modal_cursor(context)
             return {'CANCELLED'}
 
-        if event.type == 'RIGHTMOUSE' and event.value == 'PRESS':
-            return {'PASS_THROUGH'}
-
         ui_map = bpy.app.driver_namespace.get(EDITOR_UI_KEY)
         area_ptr = context.area.as_pointer() if context.area else 0
         ui = ui_map.get(area_ptr) if isinstance(ui_map, dict) else None
@@ -2199,6 +2284,23 @@ class TLFC_OT_mouse_edit_curve(bpy.types.Operator):
                 hovered_token = btn.get("id", "")
                 break
         wm.tlfc_hover_button = hovered_token
+
+        if event.type == 'RIGHTMOUSE' and event.value == 'PRESS':
+            for btn in ui.get("buttons_abs", []):
+                if not _point_in_rect(mx_abs, my_abs, btn["rect"]):
+                    continue
+                if btn.get("op") != "preset_apply":
+                    return {'PASS_THROUGH'}
+                idx = int(btn.get("kwargs", {}).get("idx", -1))
+                if idx >= 0:
+                    try:
+                        bpy.ops.tlfc.edit_preset_at_index('INVOKE_DEFAULT', idx=idx)
+                        return {'RUNNING_MODAL'}
+                    except Exception:
+                        # Consume right click on preset tiles to avoid triggering editor context menu.
+                        return {'RUNNING_MODAL'}
+                return {'RUNNING_MODAL'}
+            return {'PASS_THROUGH'}
 
         # Graph separator hover detection — suppress when a handle is hovered
         # so the user can grab handles near the separator without accidentally resizing.
@@ -2354,6 +2456,7 @@ class TLFC_OT_mouse_edit_curve(bpy.types.Operator):
             if _mode_val == 'ELASTIC':
                 nx = _clamp01(nx)
                 ny = _clamp01(ny)
+                ease_mode = _normalize_elastic_ease_mode(getattr(wm, 'tlfc_elastic_ease_mode', _prop_default("tlfc_elastic_ease_mode")))
                 if event.ctrl:
                     nx, ny = _snap_grid(nx, ny, wm.tlfc_grid_subdiv)
                     nx = _clamp01(nx)
@@ -2361,7 +2464,8 @@ class TLFC_OT_mouse_edit_curve(bpy.types.Operator):
                 if self._drag == "h1":
                     wm.tlfc_elastic_amplitude = _unit_to_prop("tlfc_elastic_amplitude", ny)
                 else:
-                    wm.tlfc_elastic_period = _unit_to_prop("tlfc_elastic_period", nx)
+                    per_u = (1.0 - nx) if ease_mode == 'EASE_IN' else nx
+                    wm.tlfc_elastic_period = _unit_to_prop("tlfc_elastic_period", per_u)
             else:
                 nx, ny = _constrain_handle(self._drag, nx, ny)
                 if event.ctrl:
@@ -2472,10 +2576,11 @@ class TLFC_OT_apply_curve(bpy.types.Operator):
         if _mode_val == 'ELASTIC':
             amplitude = _clamp_prop("tlfc_elastic_amplitude", getattr(wm, 'tlfc_elastic_amplitude', _prop_default("tlfc_elastic_amplitude")))
             period = _clamp_prop("tlfc_elastic_period", getattr(wm, 'tlfc_elastic_period', _prop_default("tlfc_elastic_period")))
+            ease_mode = _normalize_elastic_ease_mode(getattr(wm, 'tlfc_elastic_ease_mode', _prop_default("tlfc_elastic_ease_mode")))
             pairs = 0
             curves = set()
             for fc, k0, k1 in _iter_selected_segments(context):
-                if _apply_elastic_to_segment(fc, k0, k1, amplitude, period):
+                if _apply_elastic_to_segment(fc, k0, k1, amplitude, period, ease_mode=ease_mode):
                     fc.update()
                     pairs += 1
                     curves.add(id(fc))
@@ -2531,6 +2636,11 @@ class TLFC_OT_mirror_curve(bpy.types.Operator):
 
     def execute(self, context):
         wm = context.window_manager
+        if getattr(wm, 'tlfc_sidebar_mode', _prop_default("tlfc_sidebar_mode")) == 'ELASTIC':
+            cur = _normalize_elastic_ease_mode(getattr(wm, 'tlfc_elastic_ease_mode', _prop_default("tlfc_elastic_ease_mode")))
+            wm.tlfc_elastic_ease_mode = 'EASE_IN' if cur == 'EASE_OUT' else 'EASE_OUT'
+            return {'FINISHED'}
+
         h1x, h1y = wm.tlfc_h1x, wm.tlfc_h1y
         h2x, h2y = wm.tlfc_h2x, wm.tlfc_h2y
         nh1x, nh1y = 1.0 - h2x, 1.0 - h2y
@@ -2577,11 +2687,13 @@ class TLFC_OT_read_curve(bpy.types.Operator):
             wm.tlfc_sidebar_mode = 'ELASTIC'
             amp = float(getattr(k0, "amplitude", _prop_default("tlfc_elastic_amplitude")))
             per = float(getattr(k0, "period", _prop_default("tlfc_elastic_period")))
+            easing = str(getattr(k0, "easing", "EASE_OUT"))
             df = float(seg.get("df", 1.0))
             if abs(df) > 1e-8:
                 per = per / df
             wm.tlfc_elastic_amplitude = _clamp_prop("tlfc_elastic_amplitude", amp)
             wm.tlfc_elastic_period = _clamp_prop("tlfc_elastic_period", per)
+            wm.tlfc_elastic_ease_mode = 'EASE_IN' if easing == 'EASE_IN' else 'EASE_OUT'
             self.report({'INFO'}, _t(wm, "report.elastic_loaded", "Elastic curve loaded from selected key segment"))
         else:
             wm.tlfc_sidebar_mode = 'BEZIER'
@@ -2626,6 +2738,88 @@ class TLFC_OT_save_preset(bpy.types.Operator):
             self.report({'WARNING'}, _t(context.window_manager, "report.preset_save_failed", "Failed to save preset file"))
             return {'CANCELLED'}
         self.report({'INFO'}, _t(context.window_manager, "report.preset_saved", "Preset saved"))
+        return {'FINISHED'}
+
+
+class TLFC_OT_edit_preset_at_index(bpy.types.Operator):
+    bl_idname = "tlfc.edit_preset_at_index"
+    bl_label = "Edit Preset"
+    bl_description = "Rename a preset and change its tile background color"
+
+    idx: bpy.props.IntProperty(default=-1, options={'HIDDEN'})
+    preset_name: bpy.props.StringProperty(name="Name", default="Preset")
+    preset_use_color: bpy.props.BoolProperty(name="Use Color", default=True)
+    preset_color: bpy.props.FloatVectorProperty(
+        name="Background Color",
+        size=3,
+        min=0.0,
+        max=1.0,
+        subtype='COLOR',
+        default=(0.25, 0.35, 0.55),
+    )
+
+    def invoke(self, context, event):
+        presets = list(_load_presets())
+        if self.idx < 0 or self.idx >= len(presets):
+            self.report({'WARNING'}, _t(context.window_manager, "report.invalid_preset_index", "Invalid preset index"))
+            return {'CANCELLED'}
+
+        p = presets[self.idx]
+        self.preset_name = str(p.get("name", "Preset"))
+        col = p.get("color")
+        if isinstance(col, (list, tuple)) and len(col) >= 3:
+            self.preset_use_color = True
+            try:
+                self.preset_color = (
+                    _clamp01(float(col[0])),
+                    _clamp01(float(col[1])),
+                    _clamp01(float(col[2])),
+                )
+            except Exception:
+                self.preset_color = tuple(TLFC_COLORS["preset_tile_bg"][0:3])
+        else:
+            self.preset_use_color = False
+            self.preset_color = tuple(TLFC_COLORS["preset_tile_bg"][0:3])
+
+        return context.window_manager.invoke_props_dialog(self, width=340)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "preset_name")
+        color_row = layout.row(align=True)
+        color_row.prop(self, "preset_use_color", text="")
+        color_input = color_row.row(align=True)
+        color_input.enabled = bool(self.preset_use_color)
+        color_input.prop(self, "preset_color")
+        layout.separator()
+        layout.label(text=_t(context.window_manager, "note.shift_click_delete_preset", "Tip: Shift+Click a preset tile to delete it."))
+
+    def execute(self, context):
+        presets = list(_load_presets())
+        if self.idx < 0 or self.idx >= len(presets):
+            self.report({'WARNING'}, _t(context.window_manager, "report.invalid_preset_index", "Invalid preset index"))
+            return {'CANCELLED'}
+
+        name = str(self.preset_name).strip()
+        if not name:
+            name = "Preset"
+        p = dict(presets[self.idx])
+        p["name"] = name
+        if self.preset_use_color:
+            p["color"] = [
+                _clamp01(float(self.preset_color[0])),
+                _clamp01(float(self.preset_color[1])),
+                _clamp01(float(self.preset_color[2])),
+            ]
+        else:
+            p.pop("color", None)
+        presets[self.idx] = p
+        if not _save_presets(presets):
+            self.report({'WARNING'}, _t(context.window_manager, "report.preset_save_failed", "Failed to save preset file"))
+            return {'CANCELLED'}
+
+        _tag_redraw_dopesheet()
+        self.report({'INFO'}, _t(context.window_manager, "report.preset_updated", "Preset updated"))
         return {'FINISHED'}
 
 
@@ -2705,6 +2899,7 @@ classes = (
     TLFC_OT_reset_curve,
     TLFC_OT_read_curve,
     TLFC_OT_save_preset,
+    TLFC_OT_edit_preset_at_index,
     TLFC_OT_open_preset_file,
     TLFC_PT_editor_header_dropdown,
     TLFC_PT_graph_editor_header_dropdown,
@@ -2878,6 +3073,15 @@ def register():
             ('ELASTIC', 'Elastic', 'Elastic ease-out editor'),
         ],
         default=TLFC_PROPERTY_DEFAULTS["tlfc_sidebar_mode"],
+    )
+    bpy.types.WindowManager.tlfc_elastic_ease_mode = bpy.props.EnumProperty(
+        name="Elastic Ease",
+        description="Elastic direction mode",
+        items=[
+            ('EASE_OUT', 'Ease Out', 'Elastic ease out'),
+            ('EASE_IN', 'Ease In', 'Elastic ease in'),
+        ],
+        default=TLFC_PROPERTY_DEFAULTS["tlfc_elastic_ease_mode"],
     )
     bpy.types.WindowManager.tlfc_graph_height_ratio = bpy.props.FloatProperty(
         name="Graph Height Ratio",
@@ -3089,6 +3293,7 @@ def unregister():
         "tlfc_pressed_button",
         "tlfc_hover_handle",
         "tlfc_sidebar_mode",
+        "tlfc_elastic_ease_mode",
         "tlfc_graph_height_ratio",
         "tlfc_hover_graph_sep",
         "tlfc_elastic_amplitude",
