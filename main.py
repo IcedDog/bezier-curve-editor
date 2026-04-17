@@ -623,23 +623,6 @@ def _theme_colors():
 
     curve_selected = _pick("common.anim.keyframe_selected")
 
-    # Read the actual grid color from the dopesheet/graph editor theme.
-    # Try dopesheet first, then graph_editor, then nla_editor as fallbacks.
-    grid_c = None
-    for _editor_key in ("dopesheet_editor", "graph_editor", "nla_editor"):
-        try:
-            _eds = getattr(theme, _editor_key, None)
-            if _eds is not None:
-                _gc = _rgba(getattr(_eds, "grid", None), 1.0)
-                if _gc is not None:
-                    grid_c = _gc
-                    break
-        except Exception:
-            pass
-    # Final fallback: derive a visible grid color from reg_text at low alpha.
-    if grid_c is None:
-        grid_c = _alpha(reg_text, 0.5) if reg_text else None
-
     palette = {
         "white": _alpha(reg_text_sel, 1.0),
         "text_default": _alpha(reg_text, 1.0),
@@ -667,9 +650,9 @@ def _theme_colors():
         "tab_inactive_text": _alpha(tab_text, 1.0),
         "tab_inactive_hover_text": _alpha(tab_text_sel, 1.0),
         "tab_active_outline": _alpha(tab_outline, 0.9),
-        "grid_axis": _alpha(grid_c, 1.0),
-        "grid_boundary": _alpha(grid_c, 0.85),
-        "grid_regular": _alpha(grid_c, 0.55),
+        "grid_axis": _alpha(menu_outline, 1.0),
+        "grid_boundary": _alpha(menu_outline, 0.9),
+        "grid_regular": _alpha(menu_outline, 0.65),
         "elastic_curve": _alpha(curve_selected, 1.0),
         "endpoint_fill": _alpha(reg_inner, 1.0),
         "endpoint_outline": _alpha(reg_text, 0.6),
@@ -684,7 +667,7 @@ def _theme_colors():
         "bezier_h1_label": _alpha(state_overridden, 0.75),
         "bezier_h2_label": _alpha(state_changed, 0.75),
         "panel_bg": _alpha(menu_inner, 1.0),
-        "panel_border": _alpha(menu_outline, 1.0),
+        "panel_border": _alpha(menu_inner, 1.0),
         "panel_border_hover": _alpha(menu_outline, 1.0),
         "info_text": _alpha(menu_text, 1.0),
         "info_footer_text": _alpha(menu_text, 0.85),
