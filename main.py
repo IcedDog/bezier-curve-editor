@@ -797,10 +797,6 @@ def _apply_elastic_to_segment(fc, k0, k1, amplitude, period, ease_mode='EASE_OUT
     if abs(df) < 1e-8:
         return False
 
-    # Scale amplitude by value delta so large value changes can overshoot more.
-    value_scale = max(1.0, abs(dv))
-    amp_scaled = max(1.0, float(amplitude) * value_scale)
-
     # Remove existing keys strictly between k0 and k1
     existing = [kp for kp in fc.keyframe_points if f0 < kp.co[0] < f1]
     for kp in reversed(existing):
@@ -813,7 +809,7 @@ def _apply_elastic_to_segment(fc, k0, k1, amplitude, period, ease_mode='EASE_OUT
     try:
         k0.interpolation = 'ELASTIC'
         k0.easing = 'EASE_IN' if ease_mode == 'EASE_IN' else 'EASE_OUT'
-        k0.amplitude = amp_scaled
+        k0.amplitude = amplitude
         k0.period = period * df
         k1.interpolation = 'ELASTIC'
     except Exception:
