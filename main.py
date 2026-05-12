@@ -15,6 +15,7 @@ from .config import (
     EDITOR_UI_KEY,
     ENABLED_AREAS_KEY,
     PRESET_FILE,
+    BUILTIN_PRESETS,
     HANDLE_HIT_RADIUS_PX,
     SIDEBAR_EDGE_HIT_PX,
     REDRAW_LOAD_EWMA_KEY,
@@ -31,6 +32,7 @@ from .config import (
 _PRESET_CACHE = []
 _PRESET_MTIME = -1.0
 ADDON_MODULE_KEY = __package__ or __name__.split(".")[0]
+addon_keymaps = []
 
 
 def _prop_default(name):
@@ -45,9 +47,9 @@ def _clamp_prop(name, value):
     min_v, max_v = _prop_range(name)
     out = value
     if min_v is not None:
-        out = max(min_v, out)
+        out = max(float(min_v), float(out))
     if max_v is not None:
-        out = min(max_v, out)
+        out = min(float(max_v), float(out))
     return out
 
 
@@ -296,9 +298,10 @@ def _load_presets(force=False):
     try:
         mtime = os.path.getmtime(path)
     except Exception:
-        _PRESET_CACHE = []
+        # File doesn't exist yet — still show the built-in factory presets.
+        _PRESET_CACHE = list(BUILTIN_PRESETS)
         _PRESET_MTIME = -1.0
-        return []
+        return _PRESET_CACHE
 
     if not force and mtime == _PRESET_MTIME:
         return _PRESET_CACHE
@@ -334,13 +337,14 @@ def _load_presets(force=False):
                 preset["h2x"] = float(p.get("h2x", _prop_default("tlfc_h2x")))
                 preset["h2y"] = float(p.get("h2y", _prop_default("tlfc_h2y")))
             presets.append(preset)
-        _PRESET_CACHE = presets
+        # Prepend read-only built-in presets so they always appear first.
+        _PRESET_CACHE = list(BUILTIN_PRESETS) + presets
         _PRESET_MTIME = mtime
-        return presets
+        return _PRESET_CACHE
     except Exception:
-        _PRESET_CACHE = []
+        _PRESET_CACHE = list(BUILTIN_PRESETS)
         _PRESET_MTIME = mtime
-        return []
+        return _PRESET_CACHE
 
 
 def _save_presets(presets):
@@ -357,8 +361,18 @@ def _save_presets(presets):
 def _add_current_preset(wm):
     presets = list(_load_presets())
     _mode_val = getattr(wm, 'tlfc_sidebar_mode', _prop_default("tlfc_sidebar_mode"))
+
+    # Auto-number: find the next unused "Curve N" name.
+    existing_names = {p.get("name", "") for p in presets}
+    base = "Curve"
+    auto_name = base
+    counter = 1
+    while auto_name in existing_names:
+        counter += 1
+        auto_name = f"{base} {counter}"
+
     preset = {
-        "name": "Curve",
+        "name": auto_name,
         "type": _mode_val,  # 'BEZIER' or 'ELASTIC'
     }
     if _mode_val == 'ELASTIC':
@@ -370,8 +384,10 @@ def _add_current_preset(wm):
         preset["h1y"] = float(wm.tlfc_h1y)
         preset["h2x"] = float(wm.tlfc_h2x)
         preset["h2y"] = float(wm.tlfc_h2y)
-    presets.append(preset)
-    return _save_presets(presets)
+    # Save only non-builtin presets to disk.
+    user_presets = [p for p in presets if not p.get("builtin", False)]
+    user_presets.append(preset)
+    return _save_presets(user_presets)
 
 
 def _apply_preset_index(wm, idx):
@@ -397,14 +413,22 @@ def _apply_preset_index(wm, idx):
 
 
 def _delete_preset_index(idx):
-    presets = list(_load_presets())
-    if idx < 0 or idx >= len(presets):
+    n_builtins = len(BUILTIN_PRESETS)
+    if idx < n_builtins:
+        # Built-in presets cannot be deleted.
         return False
-    presets.pop(idx)
-    return _save_presets(presets)
+    # _load_presets returns builtins + user presets; strip the builtins to get
+    # only the user list that is actually persisted to disk.
+    all_presets = list(_load_presets())
+    user_presets = [p for p in all_presets if not p.get("builtin", False)]
+    user_idx = idx - n_builtins
+    if user_idx < 0 or user_idx >= len(user_presets):
+        return False
+    user_presets.pop(user_idx)
+    return _save_presets(user_presets)
 
 
-def _draw_preset_tile(x0, y0, x1, y1, preset, size_scale, colors=None):
+def _draw_preset_tile(x0, y0, x1, y1, preset, size_scale, colors=None, is_hovered=False):
     C = colors if colors is not None else TLFC_COLORS
     tile_bg = C["preset_tile_bg"]
     title_color = C["preset_title_text"]
@@ -444,11 +468,12 @@ def _draw_preset_tile(x0, y0, x1, y1, preset, size_scale, colors=None):
             bx = t
             if ease_mode == 'EASE_IN':
                 by = _elastic_ease_in_normalized(t, amplitude, period)
-                by_clamped = max(0.0, min(1.0, 0.5 + (by * 0.5)))
             else:
                 by = _elastic_ease_out_normalized(t, amplitude, period)
-                by_clamped = max(0.0, min(1.0, by * 0.5))
+            # Map full 0..1 output to the preview area; soft-clamp for display only.
+            by_clamped = max(0.0, min(1.0, by))
             pts.append((ix0 + bx * (ix1 - ix0), iy0 + by_clamped * (iy1 - iy0)))
+
     else:
         h1x = max(0.0, float(preset.get("h1x", _prop_default("tlfc_h1x"))))
         h1y = float(preset.get("h1y", _prop_default("tlfc_h1y")))
@@ -464,6 +489,18 @@ def _draw_preset_tile(x0, y0, x1, y1, preset, size_scale, colors=None):
             pts.append((ix0 + bx * (ix1 - ix0), iy0 + by * (iy1 - iy0)))
 
     _draw_aa_line_strip(pts, C["curve_orange"], width=2.0)
+    
+    if is_hovered and len(pts) >= 2:
+        import time
+        t_anim = (time.time() * 0.8) % 1.0
+        exact_idx = t_anim * (preview_steps - 1)
+        idx0 = int(exact_idx)
+        idx1 = min(idx0 + 1, preview_steps - 1)
+        blend = exact_idx - idx0
+        px = pts[idx0][0] * (1.0 - blend) + pts[idx1][0] * blend
+        py = pts[idx0][1] * (1.0 - blend) + pts[idx1][1] * blend
+        _draw_aa_circle(px, py, max(2.5, 3.5 * size_scale), C["white"], C["white"], steps=16)
+
     _draw_text_centered(x0, y0, x1, y0 + 12, preset.get("name", "P"), size=max(8, int(9 * size_scale)), color=title_color, truncate=True, pad=4)
 
 # ---------- Drawing helpers ----------
@@ -810,7 +847,10 @@ def _apply_elastic_to_segment(fc, k0, k1, amplitude, period, ease_mode='EASE_OUT
         k0.interpolation = 'ELASTIC'
         k0.easing = 'EASE_IN' if ease_mode == 'EASE_IN' else 'EASE_OUT'
         k0.amplitude = amplitude
-        k0.period = period * df
+        # Store period as-is — Blender's ELASTIC interpolation treats this as a
+        # normalised period value, not scaled by frame delta.  Previously the code
+        # multiplied by df which broke round-trips when segment lengths differed.
+        k0.period = period
         k1.interpolation = 'ELASTIC'
     except Exception:
         # Fallback if ELASTIC is not supported
@@ -976,21 +1016,49 @@ def _focused_segment(context, selected_items):
         return None
 
     fc, sel_keys, all_keys = item
-    key_source = list(sel_keys) if len(sel_keys) >= 2 else list(all_keys)
-    if len(key_source) < 2:
-        return None
-
-    key_source.sort(key=lambda kp: kp.co[0])
     frame_now = context.scene.frame_current
-    pair = None
-    for i in range(len(key_source) - 1):
-        a = key_source[i]
-        b = key_source[i + 1]
-        if a.co[0] <= frame_now <= b.co[0]:
-            pair = (a, b)
-            break
-    if pair is None:
-        pair = (key_source[0], key_source[1])
+
+    if len(sel_keys) >= 2:
+        # At least two selected keys — find the pair straddling the current frame.
+        key_source = sorted(sel_keys, key=lambda kp: kp.co[0])
+        pair = None
+        for i in range(len(key_source) - 1):
+            a = key_source[i]
+            b = key_source[i + 1]
+            if a.co[0] <= frame_now <= b.co[0]:
+                pair = (a, b)
+                break
+        if pair is None:
+            pair = (key_source[0], key_source[1])
+    elif sel_keys:
+        # Exactly one selected key — use it as k0 and find the nearest following key
+        # from *all_keys* to form a meaningful segment.
+        all_sorted = sorted(all_keys, key=lambda kp: kp.co[0])
+        k0 = sel_keys[0]
+        k0_frame = k0.co[0]
+        # Try to find a key that comes strictly after k0.
+        k1 = None
+        for kp in all_sorted:
+            if kp.co[0] > k0_frame + 1e-8:
+                k1 = kp
+                break
+        if k1 is None:
+            return None
+        pair = (k0, k1)
+    else:
+        # No selected keys — fall back to the pair straddling the current frame from all_keys.
+        if len(all_keys) < 2:
+            return None
+        all_sorted = sorted(all_keys, key=lambda kp: kp.co[0])
+        pair = None
+        for i in range(len(all_sorted) - 1):
+            a = all_sorted[i]
+            b = all_sorted[i + 1]
+            if a.co[0] <= frame_now <= b.co[0]:
+                pair = (a, b)
+                break
+        if pair is None:
+            pair = (all_sorted[0], all_sorted[1])
 
     k0, k1 = pair
     f0, v0 = k0.co[0], k0.co[1]
@@ -1131,6 +1199,7 @@ def _point_in_rect(px, py, rect):
 
 def _overlay_buttons(_wm):
     auto_label = _t(_wm, "button.auto_on", "Auto: ON") if getattr(_wm, "tlfc_auto_apply", False) else _t(_wm, "button.auto_off", "Auto: OFF")
+    link_label = _t(_wm, "button.link_on", "Link ●") if getattr(_wm, "tlfc_link_handles", False) else _t(_wm, "button.link_off", "Link ○")
     return [
         [
             # {"label": _t(_wm, "button.zoom_in", "Zoom +"), "op": "zoom", "kwargs": {"mode": "IN"}},
@@ -1139,6 +1208,7 @@ def _overlay_buttons(_wm):
         ],
         [
             {"label": _t(_wm, "button.mirror", "Mirror"), "op": "mirror", "kwargs": {}},
+            {"label": link_label, "op": "toggle_link", "kwargs": {}},
             {"label": _t(_wm, "button.copy_selected", "Copy Sel."), "op": "read", "kwargs": {}},
             {"label": _t(_wm, "button.reset", "Reset"), "op": "reset", "kwargs": {}},
         ],
@@ -1166,6 +1236,8 @@ def _invoke_overlay_button(context, op, kwargs, shift=False):
                     bpy.ops.tlfc.apply_curve()
         elif op == "toggle_auto":
             context.window_manager.tlfc_auto_apply = not context.window_manager.tlfc_auto_apply
+        elif op == "toggle_link":
+            context.window_manager.tlfc_link_handles = not context.window_manager.tlfc_link_handles
         elif op == "apply":
             bpy.ops.tlfc.apply_curve()
         elif op == "interp":
@@ -1290,6 +1362,11 @@ def draw_editor_sidebar():
             _draw_aa_line_strip([(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)], border, width=2.0)
     title_top_pad = max(6, int(8 * size_scale))
     selected_items = _selected_fcurves_with_selected_keys(ctx)
+    n_curves = len(selected_items)
+    apply_lbl = _t(wm, "button.apply_curve", "APPLY CURVE")
+    if n_curves > 1:
+        apply_lbl += f" ({n_curves})"
+
     ns = bpy.app.driver_namespace
 
     sidebar_mode = getattr(wm, 'tlfc_sidebar_mode', _prop_default("tlfc_sidebar_mode"))
@@ -1609,6 +1686,11 @@ def draw_editor_sidebar():
         "sidebar_edge_hit_px": SIDEBAR_EDGE_HIT_PX,
         "rect": (sx0, sy0, sx1, sy1),
         "rect_abs": (region.x + sx0, region.y + sy0, region.x + sx1, region.y + sy1),
+        # "h1"/"h2" are the screen-space positions of the two interactive handles.
+        # In Bezier mode: H1 = right handle of k0, H2 = left handle of k1.
+        # In Elastic mode: H1 = amplitude handle, H2 = period handle.
+        # The modal operator uses these for hit-testing regardless of mode.
+        "sidebar_mode": sidebar_mode,
         "h1": p1s,
         "h2": p2s,
         "h1_abs": (region.x + p1s[0], region.y + p1s[1]),
@@ -1661,7 +1743,7 @@ def draw_editor_sidebar():
         apply_fill, apply_border, apply_text = _button_state_colors("apply", apply_state, colors=C)
         _draw_rect(bx0, ay0, bx1, ay1, apply_fill)
         # _draw_aa_line_strip([(bx0, ay0), (bx1, ay0), (bx1, ay1), (bx0, ay1), (bx0, ay0)], apply_border, width=1.0)
-        _draw_text_centered(bx0, ay0, bx1, ay1, _t(wm, "button.apply_curve", "APPLY CURVE"), size=btn_font, color=apply_text, truncate=True, pad=8)
+        _draw_text_centered(bx0, ay0, bx1, ay1, apply_lbl, size=btn_font, color=apply_text, truncate=True, pad=8)
         ui_map[area_ptr]["buttons_abs"].append({
             "rect": (region.x + bx0, region.y + ay0, region.x + bx1, region.y + ay1),
             "op": "apply",
@@ -1723,17 +1805,39 @@ def draw_editor_sidebar():
         # Preset square buttons under existing buttons.
         if presets:
             cols = max(1, int((bx1 - bx0 + gap) // (tile + gap)))
+            cur_y = by
+            c = 0
+            last_cat = object()
+            
             for idx, p in enumerate(presets):
-                c = idx % cols
-                r = idx // cols
+                name = p.get("name", "")
+                parts = name.split(":", 1)
+                cat = parts[0].strip() if len(parts) > 1 else ""
+                
+                if cat != last_cat:
+                    if c > 0:
+                        cur_y -= (tile + gap)
+                        c = 0
+                    if cat and last_cat is not object():
+                        cur_y -= gap
+                    if cat:
+                        header_h = max(16, int(20 * size_scale))
+                        if cur_y - header_h < y0 + apply_h + 20:
+                            break
+                        _draw_text(bx0, cur_y - header_h + gap + 4, cat, size=int(btn_font * 1.1), color=C.get("preset_title_text", C["info_text"]))
+                        cur_y -= header_h
+                    last_cat = cat
+
                 tx0 = bx0 + c * (tile + gap)
                 tx1 = min(tx0 + tile, bx1)
-                ty1 = by - r * (tile + gap)
+                ty1 = cur_y
                 ty0 = ty1 - tile
                 if ty0 < y0 + apply_h + 20:
                     break
-                _draw_preset_tile(tx0, ty0, tx1, ty1, p, size_scale, colors=C)
                 token = _button_token("preset_apply", {"idx": idx})
+                is_hovered = (hover_token == token)
+                _draw_preset_tile(tx0, ty0, tx1, ty1, p, size_scale, colors=C, is_hovered=is_hovered)
+                
                 if pressed_token == token:
                     outline = _button_state_colors("preset", "pressed", colors=C)[1]
                     _draw_aa_line_strip([(tx0, ty0), (tx1, ty0), (tx1, ty1), (tx0, ty1), (tx0, ty0)], outline, width=4.0)
@@ -1746,6 +1850,10 @@ def draw_editor_sidebar():
                     "kwargs": {"idx": idx},
                     "id": token,
                 })
+                c += 1
+                if c >= cols:
+                    c = 0
+                    cur_y -= (tile + gap)
     else:
         # Not enough side space: move buttons under the grid and hide info text.
         ux0 = x0 + 10
@@ -1780,22 +1888,44 @@ def draw_editor_sidebar():
         # Presets under existing buttons in compact layout.
         if presets:
             cols = max(2, int((ux1 - ux0 + gap) // (tile + gap)))
+            cur_y = by
+            c = 0
+            last_cat = object()
+            
             for idx, p in enumerate(presets):
-                c = idx % cols
-                r = idx // cols
+                name = p.get("name", "")
+                parts = name.split(":", 1)
+                cat = parts[0].strip() if len(parts) > 1 else ""
+                
+                if cat != last_cat:
+                    if c > 0:
+                        cur_y -= (tile + gap)
+                        c = 0
+                    if cat and last_cat is not object():
+                        cur_y -= gap
+                    if cat:
+                        header_h = max(16, int(20 * size_scale))
+                        if cur_y - header_h < y0 + apply_h + 20:
+                            break
+                        _draw_text(ux0, cur_y - header_h + gap + 4, cat, size=int(btn_font * 1.1), color=C.get("preset_title_text", C["info_text"]))
+                        cur_y -= header_h
+                    last_cat = cat
+
                 tx0 = ux0 + c * (tile + gap)
                 tx1 = min(tx0 + tile, ux1)
-                ty1 = by - r * (tile + gap)
+                ty1 = cur_y
                 ty0 = ty1 - tile
                 if ty0 < y0 + apply_h + 20:
                     break
-                _draw_preset_tile(tx0, ty0, tx1, ty1, p, size_scale, colors=C)
                 token = _button_token("preset_apply", {"idx": idx})
+                is_hovered = (hover_token == token)
+                _draw_preset_tile(tx0, ty0, tx1, ty1, p, size_scale, colors=C, is_hovered=is_hovered)
+                
                 if pressed_token == token:
-                    outline = _button_state_colors("preset", "pressed")[1]
+                    outline = _button_state_colors("preset", "pressed", colors=C)[1]
                     _draw_aa_line_strip([(tx0, ty0), (tx1, ty0), (tx1, ty1), (tx0, ty1), (tx0, ty0)], outline, width=2.0)
                 elif hover_token == token:
-                    outline = _button_state_colors("preset", "hover")[1]
+                    outline = _button_state_colors("preset", "hover", colors=C)[1]
                     _draw_aa_line_strip([(tx0, ty0), (tx1, ty0), (tx1, ty1), (tx0, ty1), (tx0, ty0)], outline, width=1.6)
                 ui_map[area_ptr]["buttons_abs"].append({
                     "rect": (region.x + tx0, region.y + ty0, region.x + tx1, region.y + ty1),
@@ -1803,6 +1933,10 @@ def draw_editor_sidebar():
                     "kwargs": {"idx": idx},
                     "id": token,
                 })
+                c += 1
+                if c >= cols:
+                    c = 0
+                    cur_y -= (tile + gap)
 
         ay1 = y0 + 10 + apply_h
         ay0 = y0 + 10
@@ -1811,7 +1945,7 @@ def draw_editor_sidebar():
         apply_fill, apply_border, apply_text = _button_state_colors("apply", apply_state, colors=C)
         _draw_rect(ux0, ay0, ux1, ay1, apply_fill)
         # _draw_aa_line_strip([(ux0, ay0), (ux1, ay0), (ux1, ay1), (ux0, ay1), (ux0, ay0)], apply_border, width=1.0)
-        _draw_text_centered(ux0, ay0, ux1, ay1, _t(wm, "button.apply_curve", "APPLY CURVE"), size=btn_font, color=apply_text, truncate=True, pad=8)
+        _draw_text_centered(ux0, ay0, ux1, ay1, apply_lbl, size=btn_font, color=apply_text, truncate=True, pad=8)
         ui_map[area_ptr]["buttons_abs"].append({
             "rect": (region.x + ux0, region.y + ay0, region.x + ux1, region.y + ay1),
             "op": "apply",
@@ -2473,9 +2607,17 @@ class TLFC_OT_mouse_edit_curve(bpy.types.Operator):
                 if self._drag == "h1":
                     wm.tlfc_h1x = nx
                     wm.tlfc_h1y = ny
+                    # Linked handles: mirror H2 symmetrically around the curve centre.
+                    if getattr(wm, "tlfc_link_handles", False):
+                        wm.tlfc_h2x = _clamp01(1.0 - nx)
+                        wm.tlfc_h2y = 1.0 - ny
                 else:
                     wm.tlfc_h2x = nx
                     wm.tlfc_h2y = ny
+                    # Linked handles: mirror H1 symmetrically around the curve centre.
+                    if getattr(wm, "tlfc_link_handles", False):
+                        wm.tlfc_h1x = _clamp01(1.0 - nx)
+                        wm.tlfc_h1y = 1.0 - ny
 
             if wm.tlfc_auto_apply:
                 bpy.ops.tlfc.apply_curve()
@@ -2565,9 +2707,11 @@ class TLFC_OT_apply_curve(bpy.types.Operator):
     bl_idname = "tlfc.apply_curve"
     bl_label = "Apply Curve"
     bl_description = "Apply the current editor curve to selected keyframe segments"
+    bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
         wm = context.window_manager
+
         _mode_val = getattr(wm, 'tlfc_sidebar_mode', _prop_default("tlfc_sidebar_mode"))
         if _mode_val == 'ELASTIC':
             amplitude = _clamp_prop("tlfc_elastic_amplitude", getattr(wm, 'tlfc_elastic_amplitude', _prop_default("tlfc_elastic_amplitude")))
@@ -2605,6 +2749,7 @@ class TLFC_OT_set_interpolation(bpy.types.Operator):
     bl_idname = "tlfc.set_interpolation"
     bl_label = "Set Interpolation"
     bl_description = "Set interpolation mode for selected keyframes"
+    bl_options = {'REGISTER', 'UNDO'}
     mode: bpy.props.EnumProperty(
         items=[
             ('LINEAR', 'Linear', ''),
@@ -2615,9 +2760,16 @@ class TLFC_OT_set_interpolation(bpy.types.Operator):
     def execute(self, context):
         changed = 0
         for _fc, sel_keys, _all_keys in _selected_fcurves_with_selected_keys(context):
+            curve_changed = False
             for kp in sel_keys:
                 kp.interpolation = self.mode
                 changed += 1
+                curve_changed = True
+            if curve_changed:
+                try:
+                    _fc.update()
+                except Exception:
+                    pass
         if changed == 0:
             self.report({'WARNING'}, _t(context.window_manager, "report.no_selected_keyframes", "No selected keyframes"))
             return {'CANCELLED'}
@@ -2629,6 +2781,7 @@ class TLFC_OT_mirror_curve(bpy.types.Operator):
     bl_idname = "tlfc.mirror_curve"
     bl_label = "Mirror Handle"
     bl_description = "Mirror Bezier handles across the center"
+    bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
         wm = context.window_manager
@@ -2649,6 +2802,7 @@ class TLFC_OT_reset_curve(bpy.types.Operator):
     bl_idname = "tlfc.reset_curve"
     bl_label = "Reset Curve"
     bl_description = "Reset Bezier handles to default values"
+    bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
         wm = context.window_manager
@@ -2682,11 +2836,9 @@ class TLFC_OT_read_curve(bpy.types.Operator):
         if is_elastic and k0 is not None:
             wm.tlfc_sidebar_mode = 'ELASTIC'
             amp = float(getattr(k0, "amplitude", _prop_default("tlfc_elastic_amplitude")))
+            # Period is stored as-is (no df scaling) since the apply path was fixed.
             per = float(getattr(k0, "period", _prop_default("tlfc_elastic_period")))
             easing = str(getattr(k0, "easing", "EASE_OUT"))
-            df = float(seg.get("df", 1.0))
-            if abs(df) > 1e-8:
-                per = per / df
             wm.tlfc_elastic_amplitude = _clamp_prop("tlfc_elastic_amplitude", amp)
             wm.tlfc_elastic_period = _clamp_prop("tlfc_elastic_period", per)
             wm.tlfc_elastic_ease_mode = 'EASE_IN' if easing == 'EASE_IN' else 'EASE_OUT'
@@ -2759,6 +2911,9 @@ class TLFC_OT_edit_preset_at_index(bpy.types.Operator):
         if self.idx < 0 or self.idx >= len(presets):
             self.report({'WARNING'}, _t(context.window_manager, "report.invalid_preset_index", "Invalid preset index"))
             return {'CANCELLED'}
+        if self.idx < len(BUILTIN_PRESETS):
+            self.report({'WARNING'}, _t(context.window_manager, "report.builtin_preset", "Built-in presets cannot be edited"))
+            return {'CANCELLED'}
 
         p = presets[self.idx]
         self.preset_name = str(p.get("name", "Preset"))
@@ -2795,6 +2950,9 @@ class TLFC_OT_edit_preset_at_index(bpy.types.Operator):
         if self.idx < 0 or self.idx >= len(presets):
             self.report({'WARNING'}, _t(context.window_manager, "report.invalid_preset_index", "Invalid preset index"))
             return {'CANCELLED'}
+        if self.idx < len(BUILTIN_PRESETS):
+            self.report({'WARNING'}, _t(context.window_manager, "report.builtin_preset", "Built-in presets cannot be edited"))
+            return {'CANCELLED'}
 
         name = str(self.preset_name).strip()
         if not name:
@@ -2810,7 +2968,9 @@ class TLFC_OT_edit_preset_at_index(bpy.types.Operator):
         else:
             p.pop("color", None)
         presets[self.idx] = p
-        if not _save_presets(presets):
+        
+        user_presets = [preset for preset in presets if not preset.get("builtin", False)]
+        if not _save_presets(user_presets):
             self.report({'WARNING'}, _t(context.window_manager, "report.preset_save_failed", "Failed to save preset file"))
             return {'CANCELLED'}
 
@@ -2828,7 +2988,7 @@ class TLFC_OT_open_preset_file(bpy.types.Operator):
         path = os.path.join(bpy.utils.extension_path_user(ADDON_MODULE_KEY, create=True), PRESET_FILE)
         # Ensure file exists so opening does not fail on first use.
         if not os.path.exists(path):
-            _save_presets(list(_load_presets()))
+            _save_presets([])
 
         try:
             bpy.ops.wm.path_open(filepath=path)
@@ -2931,6 +3091,71 @@ def _cleanup_previous():
     ns.pop(ENABLED_AREAS_KEY, None)
 
 
+def draw_graph_editor_ghost():
+    ctx = bpy.context
+    if not _any_timeline_editor_enabled():
+        return
+        
+    wm = ctx.window_manager
+    if not getattr(wm, "tlfc_mouse_editing", False):
+        return
+        
+    sidebar_mode = getattr(wm, 'tlfc_sidebar_mode', _prop_default("tlfc_sidebar_mode"))
+    
+    pts_norm = []
+    if sidebar_mode == 'ELASTIC':
+        _el_amp = _clamp_prop("tlfc_elastic_amplitude", getattr(wm, 'tlfc_elastic_amplitude', _prop_default("tlfc_elastic_amplitude")))
+        _el_per = _clamp_prop("tlfc_elastic_period", getattr(wm, 'tlfc_elastic_period', _prop_default("tlfc_elastic_period")))
+        _el_ease = _normalize_elastic_ease_mode(getattr(wm, 'tlfc_elastic_ease_mode', _prop_default("tlfc_elastic_ease_mode")))
+        
+        _el_n = 96
+        for _si in range(_el_n):
+            _st = _si / (_el_n - 1.0)
+            if _el_ease == 'EASE_IN':
+                _sv = 0.5 + (_elastic_ease_in_normalized(_st, _el_amp, _el_per) * 0.5)
+            else:
+                _sv = _elastic_ease_out_normalized(_st, _el_amp, _el_per) * 0.5
+            pts_norm.append((_st, _sv))
+    else:
+        p0 = (0.0, 0.0)
+        p1 = (wm.tlfc_h1x, wm.tlfc_h1y)
+        p2 = (wm.tlfc_h2x, wm.tlfc_h2y)
+        p3 = (1.0, 1.0)
+        n = 48
+        for i in range(n):
+            t = i / (n - 1)
+            bx, by = _bezier_point(t, p0, p1, p2, p3)
+            pts_norm.append((bx, by))
+            
+    C = _theme_colors()
+    ghost_color = (C["curve_orange"][0], C["curve_orange"][1], C["curve_orange"][2], 0.6)
+    if sidebar_mode == 'ELASTIC':
+        ghost_color = (C["elastic_curve"][0], C["elastic_curve"][1], C["elastic_curve"][2], 0.6)
+
+    region = ctx.region
+    view2d = getattr(ctx.region_data, "view2d", None) if ctx.region_data else None
+    if not view2d:
+        return
+        
+    for fc, k0, k1 in _iter_selected_segments(ctx):
+        f0, v0 = k0.co[0], k0.co[1]
+        f1, v1 = k1.co[0], k1.co[1]
+        df = f1 - f0
+        dv = v1 - v0
+        if abs(df) < 1e-8:
+            continue
+            
+        mapped_pts = []
+        for nx, ny in pts_norm:
+            try:
+                wx, wy = view2d.view_to_region(f0 + nx * df, v0 + ny * dv, clip=False)
+                mapped_pts.append((wx, wy))
+            except Exception:
+                pass
+            
+        if len(mapped_pts) >= 2:
+            _draw_aa_line_strip(mapped_pts, ghost_color, width=4.0)
+
 def _disable_runtime_handlers(clear_ui=True):
     ns = bpy.app.driver_namespace
     old_handle = ns.get(ADDON_KEY)
@@ -2956,6 +3181,14 @@ def _disable_runtime_handlers(clear_ui=True):
         except Exception:
             pass
         ns.pop(GRAPH_ADDON_KEY, None)
+
+    old_ghost_handle = ns.get("TLFC_GRAPH_GHOST_HANDLE")
+    if old_ghost_handle is not None:
+        try:
+            bpy.types.SpaceGraphEditor.draw_handler_remove(old_ghost_handle, 'WINDOW')
+        except Exception:
+            pass
+        ns.pop("TLFC_GRAPH_GHOST_HANDLE", None)
 
     if bpy.app.timers.is_registered(redraw_timer):
         try:
@@ -2986,6 +3219,12 @@ def _ensure_runtime_handlers():
             draw_editor_sidebar, (), 'WINDOW', 'POST_PIXEL'
         )
         ns[GRAPH_ADDON_KEY] = graph_handle
+
+    if ns.get("TLFC_GRAPH_GHOST_HANDLE") is None:
+        ghost_handle = bpy.types.SpaceGraphEditor.draw_handler_add(
+            draw_graph_editor_ghost, (), 'WINDOW', 'POST_PIXEL'
+        )
+        ns["TLFC_GRAPH_GHOST_HANDLE"] = ghost_handle
 
     if not bpy.app.timers.is_registered(redraw_timer):
         bpy.app.timers.register(redraw_timer, first_interval=0.1)
@@ -3045,20 +3284,26 @@ def register():
     )
     bpy.types.WindowManager.tlfc_h1x = bpy.props.FloatProperty(
         name="H1 X",
+        description="Handle 1 X position (clamped 0–1 to keep curve monotonic)",
         default=TLFC_PROPERTY_DEFAULTS["tlfc_h1x"],
-        min=TLFC_PROPERTY_RANGES["tlfc_h1x"][0],
+        min=0.0,
+        max=1.0,
     )
     bpy.types.WindowManager.tlfc_h1y = bpy.props.FloatProperty(
         name="H1 Y",
+        description="Handle 1 Y position (unbounded — allows overshoot)",
         default=TLFC_PROPERTY_DEFAULTS["tlfc_h1y"],
     )
     bpy.types.WindowManager.tlfc_h2x = bpy.props.FloatProperty(
         name="H2 X",
+        description="Handle 2 X position (clamped 0–1 to keep curve monotonic)",
         default=TLFC_PROPERTY_DEFAULTS["tlfc_h2x"],
-        max=TLFC_PROPERTY_RANGES["tlfc_h2x"][1],
+        min=0.0,
+        max=1.0,
     )
     bpy.types.WindowManager.tlfc_h2y = bpy.props.FloatProperty(
         name="H2 Y",
+        description="Handle 2 Y position (unbounded — allows overshoot)",
         default=TLFC_PROPERTY_DEFAULTS["tlfc_h2y"],
     )
     bpy.types.WindowManager.tlfc_sidebar_mode = bpy.props.EnumProperty(
@@ -3118,6 +3363,11 @@ def register():
         name="Auto Apply",
         description="Automatically apply handle edits to selected keyframe segments while dragging",
         default=TLFC_PROPERTY_DEFAULTS["tlfc_auto_apply"],
+    )
+    bpy.types.WindowManager.tlfc_link_handles = bpy.props.BoolProperty(
+        name="Link Handles",
+        description="Mirror H1 and H2 symmetrically so dragging one handle updates the other (ease-in-out mode)",
+        default=False,
     )
     bpy.types.WindowManager.tlfc_snap_threshold = bpy.props.FloatProperty(
         name="Edge Snap Threshold",
@@ -3207,6 +3457,17 @@ def register():
     if not bpy.app.timers.is_registered(_init_persistent_props):
         bpy.app.timers.register(_init_persistent_props, first_interval=0.1)
 
+    wm = bpy.context.window_manager
+    kc = wm.keyconfigs.addon
+    if kc:
+        km = kc.keymaps.new(name='Dopesheet', space_type='DOPESHEET_EDITOR')
+        kmi = km.keymap_items.new("tlfc.apply_curve", 'E', 'PRESS', alt=True)
+        addon_keymaps.append((km, kmi))
+
+        km = kc.keymaps.new(name='Graph Editor', space_type='GRAPH_EDITOR')
+        kmi = km.keymap_items.new("tlfc.apply_curve", 'E', 'PRESS', alt=True)
+        addon_keymaps.append((km, kmi))
+
 def _init_persistent_props():
     """Deferred one-shot: copy persistent addon-pref values to the WM runtime properties."""
     try:
@@ -3230,6 +3491,13 @@ def _on_load_post(dummy):
         pass
 
 def unregister():
+    for km, kmi in addon_keymaps:
+        try:
+            km.keymap_items.remove(kmi)
+        except Exception:
+            pass
+    addon_keymaps.clear()
+
     bpy.app.translations.unregister(ADDON_MODULE_KEY)
     _cleanup_previous()
     # Remove the persistent load handler.
@@ -3273,6 +3541,7 @@ def unregister():
         "tlfc_h2y",
         "tlfc_grid_subdiv",
         "tlfc_auto_apply",
+        "tlfc_link_handles",
         "tlfc_snap_threshold",
         "tlfc_view_zoom",
         "tlfc_view_pan_x",
