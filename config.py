@@ -5,6 +5,16 @@ EDITOR_UI_KEY = "TLFC_EDITOR_UI"
 ENABLED_AREAS_KEY = "TLFC_ENABLED_AREAS"
 PRESET_FILE = "curve_presets.txt"
 
+# Built-in factory presets (read-only, prepended before user presets).
+# Handle values follow the standard CSS/AE easing conventions.
+BUILTIN_PRESETS = [
+    {"name": "Linear",      "type": "BEZIER", "builtin": True, "h1x": 0.333, "h1y": 0.333, "h2x": 0.667, "h2y": 0.667, "color": [0.20, 0.20, 0.22]},
+    {"name": "Ease",        "type": "BEZIER", "builtin": True, "h1x": 0.250, "h1y": 0.100, "h2x": 0.250, "h2y": 1.000, "color": [0.18, 0.28, 0.42]},
+    {"name": "Ease In",     "type": "BEZIER", "builtin": True, "h1x": 0.420, "h1y": 0.000, "h2x": 1.000, "h2y": 1.000, "color": [0.35, 0.18, 0.40]},
+    {"name": "Ease Out",    "type": "BEZIER", "builtin": True, "h1x": 0.000, "h1y": 0.000, "h2x": 0.580, "h2y": 1.000, "color": [0.18, 0.38, 0.28]},
+    {"name": "Ease In-Out", "type": "BEZIER", "builtin": True, "h1x": 0.420, "h1y": 0.000, "h2x": 0.580, "h2y": 1.000, "color": [0.38, 0.28, 0.12]},
+]
+
 HANDLE_HIT_RADIUS_PX = 20
 SIDEBAR_EDGE_HIT_PX = 6
 
